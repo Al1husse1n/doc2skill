@@ -1,0 +1,106 @@
+interactions:
+- request:
+    body: ''
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      host:
+      - example.com
+      user-agent:
+      - doc2skill/0.1 (+https://github.com/doc2skill/doc2skill)
+    method: GET
+    uri: https://example.com/robots.txt
+  response:
+    body:
+      string: !!binary |
+        H4sIAAAAAAAA/y1S246cMAx971e4uy+tNAwapI4qCDzt/kF/wEsMuJMLSszMoNX+ew1UysU+8uX4
+        JOa7jb2sM8Ek3nVmO8FhGFsK6hHazngShH7ClEnaRYbid2cchxskci33McCUaGgtCtan/+EBPbV3
+        pscck4DGCAVpXx5sZWot3bmnYndOHFgYXZF7dNReXjojLI669yf62RG8RY8cTHmgJsuq10bzs48u
+        Js2byFPteJwELKZb84H9bUxxCfZAiw398UpEp9eqqn5+fUS7fg7Kqb5c52d5OV8hr1nIFwufMoZc
+        ZEo8NB6fB8m6upJXN40calwkNjNay2Gsq1/3CSry226EnlKg9gx1r+NS+jLlwdeUh5Rb587M3Z+J
+        M9h9MlBriAmWTKCePsfiNRmFVVg6RMjwYJniIhCItr4wU/Kcs8acYS+mK0QBBKW+qdsA3iPb7Y3W
+        LUGLseyNhLJsCAYLPqr6Me0VlzTHTPlsylll7hPPAjn1bZnPf7NOcEBqHEOU+4f59g+i5ER+QQIA
+        AA==
+    headers:
+      age:
+      - '3243'
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - HIT
+      cf-ray:
+      - a57f0d9c99f6e6b4-ADD
+      connection:
+      - keep-alive
+      content-encoding:
+      - gzip
+      content-type:
+      - text/html; charset=utf-8
+      date:
+      - Mon, 09 Nov 2026 18:59:11 GMT
+      server:
+      - cloudflare
+      transfer-encoding:
+      - chunked
+    status:
+      code: 404
+      message: Not Found
+- request:
+    body: ''
+    headers:
+      accept:
+      - '*/*'
+      accept-encoding:
+      - gzip, deflate, zstd
+      connection:
+      - keep-alive
+      host:
+      - example.com
+      user-agent:
+      - doc2skill/0.1 (+https://github.com/doc2skill/doc2skill)
+    method: GET
+    uri: https://example.com/
+  response:
+    body:
+      string: !!binary |
+        H4sIAAAAAAAA/y1S246cMAx971e4uy+tNAwapI4qCDzt/kF/wEsMuJMLSszMoNX+ew1UysU+8uX4
+        JOa7jb2sM8Ek3nVmO8FhGFsK6hHazngShH7ClEnaRYbid2cchxskci33McCUaGgtCtan/+EBPbV3
+        pscck4DGCAVpXx5sZWot3bmnYndOHFgYXZF7dNReXjojLI669yf62RG8RY8cTHmgJsuq10bzs48u
+        Js2byFPteJwELKZb84H9bUxxCfZAiw398UpEp9eqqn5+fUS7fg7Kqb5c52d5OV8hr1nIFwufMoZc
+        ZEo8NB6fB8m6upJXN40calwkNjNay2Gsq1/3CSry226EnlKg9gx1r+NS+jLlwdeUh5Rb587M3Z+J
+        M9h9MlBriAmWTKCePsfiNRmFVVg6RMjwYJniIhCItr4wU/Kcs8acYS+mK0QBBKW+qdsA3iPb7Y3W
+        LUGLseyNhLJsCAYLPqr6Me0VlzTHTPlsylll7hPPAjn1bZnPf7NOcEBqHEOU+4f59g+i5ER+QQIA
+        AA==
+    headers:
+      age:
+      - '3287'
+      allow:
+      - GET, HEAD
+      alt-svc:
+      - h3=":443"; ma=86400
+      cf-cache-status:
+      - HIT
+      cf-ray:
+      - a57f0d9ceabde6b4-ADD
+      connection:
+      - keep-alive
+      content-encoding:
+      - gzip
+      content-type:
+      - text/html; charset=utf-8
+      date:
+      - Mon, 09 Nov 2026 18:59:11 GMT
+      last-modified:
+      - Sun, 08 Nov 2026 18:05:34 GMT
+      server:
+      - cloudflare
+      transfer-encoding:
+      - chunked
+    status:
+      code: 200
+      message: OK
+version: 1

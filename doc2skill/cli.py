@@ -114,7 +114,9 @@ def main(
     has_llm_error = any(
         "LLM synthesis failed" in err for err in result.get("errors", [])
     )
-    has_llm_error = any("LLM synthesis failed" in err for err in result.get("errors", []))
+    has_llm_error = any(
+        "LLM synthesis failed" in err for err in result.get("errors", [])
+    )
     fatal_errors = [
         err
         for err in result.get("errors", [])
