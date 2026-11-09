@@ -123,4 +123,3 @@ def test_budget_guard_allows_llm_when_within_budget(
     content = Path(result["output_path"]).read_text(encoding="utf-8")
     assert "description: Synthesized agent skill." in content
     assert "## When to use\n- Trigger scenario 1\n- Trigger scenario 2" in content
-

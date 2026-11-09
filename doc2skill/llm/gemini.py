@@ -1,7 +1,12 @@
 import json
 import os
+import re
 from collections.abc import Sequence
 from typing import Any
+
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from google import genai
 from google.genai import types
@@ -23,7 +28,7 @@ class FrontmatterSchema(BaseModel):
     )
     when_to_use: str = Field(
         ...,
-        description="2-5 bullet points, each starting with a trigger scenario. Do not invent capabilities not present in the docs.",
+        description="2-5 markdown bullet points, each on its own line separated by newline '\\n', starting with '- '.",
     )
 
 
@@ -44,7 +49,10 @@ class GeminiProvider:
         else:
             if not self.api_key:
                 raise RuntimeError("GEMINI_API_KEY not set. Export it before running.")
-            self.client = genai.Client(api_key=self.api_key)
+            self.client = genai.Client(
+                api_key=self.api_key,
+                http_options=types.HttpOptions(api_version="v1beta"),
+            )
 
     def build_prompt(self, documents: Sequence[Document]) -> str:
         """Build single prompt with titles and first ~500 chars of each document."""
@@ -110,6 +118,8 @@ Documentation snippets:
             parsed = json.loads(raw_text)
             description = str(parsed.get("description", "")).strip()
             when_to_use = str(parsed.get("when_to_use", "")).strip()
+            # Ensure each bullet point is separated by a newline
+            when_to_use = re.sub(r"([^\n])\s*-\s*", r"\1\n- ", when_to_use)
         except json.JSONDecodeError:
             description = ""
             when_to_use = raw_text.strip()

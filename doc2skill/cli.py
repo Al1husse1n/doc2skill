@@ -109,10 +109,16 @@ def main(
 
     result = graph.invoke(initial_state)
 
-    # Check if budget guard skipped the LLM
+    # Check if budget guard skipped the LLM or if LLM call failed
     has_budget_error = any("Budget exceeded" in err for err in result.get("errors", []))
+    has_llm_error = any(
+        "LLM synthesis failed" in err for err in result.get("errors", [])
+    )
+    has_llm_error = any("LLM synthesis failed" in err for err in result.get("errors", []))
     fatal_errors = [
-        err for err in result.get("errors", []) if "Budget exceeded" not in err
+        err
+        for err in result.get("errors", [])
+        if "Budget exceeded" not in err and "LLM synthesis failed" not in err
     ]
 
     if fatal_errors:
@@ -127,6 +133,8 @@ def main(
 
     if has_budget_error:
         typer.echo("LLM skipped (budget). Used fallback frontmatter.")
+    elif has_llm_error:
+        typer.echo("LLM call failed. Used fallback frontmatter.")
     elif no_llm:
         typer.echo("LLM skipped (--no-llm). Used fallback frontmatter.")
 

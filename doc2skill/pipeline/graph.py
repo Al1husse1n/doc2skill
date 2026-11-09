@@ -1,6 +1,7 @@
 import os
 from typing import Literal
 
+from google.genai import errors as genai_errors
 from langgraph.graph import END, START, StateGraph
 
 from doc2skill.budget.guard import DEFAULT_MAX_TOKENS, estimate_prompt_tokens
@@ -120,7 +121,7 @@ def distill_node(state: PipelineState) -> dict:
             "llm_input_tokens": result.input_tokens,
             "llm_output_tokens": result.output_tokens,
         }
-    except (RuntimeError, ValueError, OSError) as exc:
+    except (genai_errors.APIError, RuntimeError, ValueError, OSError) as exc:
         errors.append(f"LLM synthesis failed: {exc}")
         return {
             "distilled": list(documents),

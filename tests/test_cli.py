@@ -33,7 +33,7 @@ def test_cli_execution_and_caching(
     # 1. First run: cache miss, runs pipeline
     result1 = runner.invoke(
         app,
-        [str(cli_docs_dir), "--output", str(output_dir)],
+        [str(cli_docs_dir), "--output", str(output_dir), "--no-llm"],
     )
     assert result1.exit_code == 0
     assert "Summary:" in result1.output
@@ -48,7 +48,7 @@ def test_cli_execution_and_caching(
     # 2. Second run without --no-cache: cache hit
     result2 = runner.invoke(
         app,
-        [str(cli_docs_dir), "--output", str(output_dir)],
+        [str(cli_docs_dir), "--output", str(output_dir), "--no-llm"],
     )
     assert result2.exit_code == 0
     assert "Cache hit: writing from cache" in result2.output
@@ -57,7 +57,7 @@ def test_cli_execution_and_caching(
     # 3. Third run with --no-cache: runs pipeline again
     result3 = runner.invoke(
         app,
-        [str(cli_docs_dir), "--output", str(output_dir), "--no-cache"],
+        [str(cli_docs_dir), "--output", str(output_dir), "--no-llm", "--no-cache"],
     )
     assert result3.exit_code == 0
     assert "Cache hit" not in result3.output
