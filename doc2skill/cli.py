@@ -13,14 +13,25 @@ from doc2skill.emit.skill import derive_skill_name, write_skill_file
 from doc2skill.pipeline.graph import build_pipeline_graph
 from doc2skill.pipeline.state import create_initial_state
 
+
+class DefaultGroup(typer.core.TyperGroup):
+    """Custom TyperGroup that defaults to the 'build' command when no command is specified."""
+
+    def parse_args(self, ctx, args):
+        if args and args[0] not in self.commands and not args[0].startswith("-"):
+            args = ["build"] + args
+        return super().parse_args(ctx, args)
+
+
 app = typer.Typer(
+    cls=DefaultGroup,
     name="doc2skill",
     help="Convert documentation into agent skills.",
     add_completion=False,
 )
 
 
-@app.command()
+@app.command(name="build")
 def main(
     source_path: Annotated[
         Path,
@@ -36,6 +47,7 @@ def main(
         Path,
         typer.Option(
             "--output",
+            "--output-dir",
             "-o",
             help="Directory where output skills will be written.",
         ),
@@ -63,7 +75,7 @@ def main(
     # Check cache unless --no-cache is specified
     cached_content = None if no_cache else cache.get(key)
     if cached_content is not None and not no_cache:
-        typer.echo("Cache hit, writing from cache")
+        typer.echo("Cache hit: writing from cache")
         out_file = write_skill_file(cached_content, skill_name, output_dir=output)
         est_tokens = estimate_tokens(cached_content)
 
@@ -108,6 +120,14 @@ def main(
     typer.echo(f"  Documents loaded: {docs_loaded}")
     typer.echo(f"  Estimated tokens: {estimated_tokens}")
     typer.echo(f"  Output path: {output_path}")
+
+
+@app.command(name="version", hidden=True)
+def version() -> None:
+    """Print package version."""
+    import doc2skill
+
+    typer.echo(f"doc2skill v{doc2skill.__version__}")
 
 
 if __name__ == "__main__":

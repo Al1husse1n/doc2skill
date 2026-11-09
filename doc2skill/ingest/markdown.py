@@ -44,9 +44,9 @@ def load_markdown_directory(source_path: str | Path) -> list[Document]:
             continue
 
         try:
-            content = path.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8-sig")
         except UnicodeDecodeError:
-            content = path.read_text(encoding="utf-8", errors="replace")
+            content = path.read_text(encoding="utf-8-sig", errors="replace")
 
         # Use forward slashes for cross-platform consistency
         display_path = rel_path.as_posix()

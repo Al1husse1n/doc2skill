@@ -29,8 +29,8 @@ def extract_description(
     first_doc = documents[0]
     content = first_doc.content
 
-    # Strip YAML frontmatter if present
-    text = content.strip()
+    # Strip UTF-8 BOM if present
+    text = content.lstrip("\ufeff").strip()
     if text.startswith("---"):
         parts = text.split("---", 2)
         if len(parts) >= 3:

@@ -51,7 +51,7 @@ def test_cli_execution_and_caching(
         [str(cli_docs_dir), "--output", str(output_dir)],
     )
     assert result2.exit_code == 0
-    assert "Cache hit, writing from cache" in result2.output
+    assert "Cache hit: writing from cache" in result2.output
     assert "Summary:" in result2.output
 
     # 3. Third run with --no-cache: runs pipeline again
