@@ -130,14 +130,22 @@ async def check_sitemap_exists(domain: str, client: httpx.AsyncClient) -> bool:
         return False
 
 
-def discover_sitemap_urls(domain_or_url: str) -> list[str]:
+def discover_sitemap_urls(
+    domain_or_url: str, extra_paths: set[str] | None = None
+) -> list[str]:
     """Discover URLs from sitemaps using ultimate-sitemap-parser."""
-    tree = usp.tree.sitemap_tree_for_homepage(domain_or_url)
-    urls: list[str] = []
-    for page in tree.all_pages():
-        if getattr(page, "url", None):
-            urls.append(page.url)
-    return urls
+    try:
+        tree = usp.tree.sitemap_tree_for_homepage(
+            domain_or_url, extra_known_paths=extra_paths
+        )
+        urls: list[str] = []
+        for page in tree.all_pages():
+            if getattr(page, "url", None):
+                urls.append(page.url)
+        return urls
+    except Exception as exc:
+        logger.warning("Failed to discover sitemap URLs for %s: %s", domain_or_url, exc)
+        return []
 
 
 async def load_url(
@@ -174,7 +182,12 @@ async def load_url(
         if is_sitemap:
             # Discover URLs via sitemap tree in thread pool
             loop = asyncio.get_running_loop()
-            discovered = await loop.run_in_executor(None, discover_sitemap_urls, domain)
+            extra_paths = (
+                {parsed.path} if parsed.path and parsed.path.endswith(".xml") else None
+            )
+            discovered = await loop.run_in_executor(
+                None, discover_sitemap_urls, domain, extra_paths
+            )
             total = len(discovered)
             if total > max_pages:
                 logger.warning("Truncated to %d pages (found %d)", max_pages, total)
@@ -185,6 +198,11 @@ async def load_url(
                 if doc:
                     documents.append(doc)
                 await asyncio.sleep(POLITE_DELAY)
+
+            if not documents and not url.endswith(".xml"):
+                doc = await extract_page(url, client)
+                if doc:
+                    documents.append(doc)
         else:
             doc = await extract_page(url, client)
             if doc:

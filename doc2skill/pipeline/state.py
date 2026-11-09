@@ -1,3 +1,4 @@
+import os
 from typing import Any, TypedDict
 
 from doc2skill.ingest.base import Document
@@ -31,10 +32,11 @@ def create_initial_state(
     max_tokens: int = 50_000,
     output_dir: str = "./output",
     no_llm: bool = False,
-    model: str = "gemini-2.5-flash",
+    model: str | None = None,
     llm_provider: Any = None,
 ) -> PipelineState:
     """Helper to initialize a fresh PipelineState dictionary."""
+    selected_model = model or os.getenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
     return {
         "source_path": source_path,
         "documents": [],
@@ -52,6 +54,6 @@ def create_initial_state(
         "frontmatter": None,
         "skip_llm": False,
         "no_llm": no_llm,
-        "model": model,
+        "model": selected_model,
         "llm_provider": llm_provider,
     }

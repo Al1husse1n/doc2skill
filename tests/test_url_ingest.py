@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from doc2skill.ingest.base import Document
 from doc2skill.ingest.url import (
     derive_url_title,
     extract_html_title,
@@ -85,3 +86,99 @@ def test_derive_url_title_fallbacks():
         derive_url_title("", "no heading here", "https://site.com/docs/guide")
         == "guide"
     )
+
+
+@pytest.mark.asyncio
+async def test_sitemap_url_ingestion():
+    """Verify that a sitemap URL discovers and fetches pages."""
+    mock_urls = [
+        "https://test.com/guide1",
+        "https://test.com/guide2",
+    ]
+    docs_map = {
+        "https://test.com/guide1": Document(
+            path="https://test.com/guide1",
+            content="# Guide 1\nContent 1",
+            title="Guide 1",
+        ),
+        "https://test.com/guide2": Document(
+            path="https://test.com/guide2",
+            content="# Guide 2\nContent 2",
+            title="Guide 2",
+        ),
+    }
+
+    async def fake_extract(url, client):
+        return docs_map.get(url)
+
+    with (
+        patch("doc2skill.ingest.url.discover_sitemap_urls", return_value=mock_urls),
+        patch("doc2skill.ingest.url.extract_page", side_effect=fake_extract),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        docs = await load_url("https://test.com/sitemap.xml", max_pages=10)
+        assert len(docs) == 2
+        assert docs[0].path == "https://test.com/guide1"
+        assert docs[1].path == "https://test.com/guide2"
+
+
+@pytest.mark.asyncio
+async def test_sitemap_max_pages_truncation(caplog):
+    """Verify sitemap discovery is capped by max_pages and logs a warning."""
+    import logging
+
+    mock_urls = [f"https://test.com/page{i}" for i in range(10)]
+
+    async def fake_extract(url, client):
+        return Document(path=url, content="content", title="title")
+
+    with (
+        patch("doc2skill.ingest.url.discover_sitemap_urls", return_value=mock_urls),
+        patch("doc2skill.ingest.url.extract_page", side_effect=fake_extract),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+        caplog.at_level(logging.WARNING),
+    ):
+        docs = await load_url("https://test.com/sitemap.xml", max_pages=3)
+        assert len(docs) == 3
+        assert "Truncated to 3 pages (found 10)" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_sitemap_robots_disallowed_skipped():
+    """Verify that disallowed pages in a sitemap are skipped without failing the run."""
+    mock_urls = [
+        "https://test.com/allowed",
+        "https://test.com/forbidden",
+    ]
+
+    async def fake_extract(url, client):
+        if "forbidden" in url:
+            return None
+        return Document(path=url, content="allowed content", title="Allowed")
+
+    with (
+        patch("doc2skill.ingest.url.discover_sitemap_urls", return_value=mock_urls),
+        patch("doc2skill.ingest.url.extract_page", side_effect=fake_extract),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        docs = await load_url("https://test.com/sitemap.xml", max_pages=10)
+        assert len(docs) == 1
+        assert docs[0].path == "https://test.com/allowed"
+
+
+@pytest.mark.asyncio
+async def test_sitemap_fallback_to_single_page():
+    """Verify fallback to single page when sitemap discovery yields no pages."""
+    single_doc = Document(
+        path="https://test.com/home", content="Single page", title="Home"
+    )
+
+    with (
+        patch("doc2skill.ingest.url.check_sitemap_exists", return_value=True),
+        patch("doc2skill.ingest.url.discover_sitemap_urls", return_value=[]),
+        patch("doc2skill.ingest.url.extract_page", return_value=single_doc),
+        patch("asyncio.sleep", new_callable=AsyncMock),
+    ):
+        docs = await load_url("https://test.com/home", follow_sitemap=True)
+        assert len(docs) == 1
+        assert docs[0].path == "https://test.com/home"
