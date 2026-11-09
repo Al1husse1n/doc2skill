@@ -9,6 +9,12 @@ runner = CliRunner()
 
 
 @pytest.fixture
+def cli_runner() -> CliRunner:
+    """Fixture providing Typer CliRunner."""
+    return CliRunner()
+
+
+@pytest.fixture
 def cli_docs_dir(tmp_path: Path) -> Path:
     """Fixture directory for CLI testing."""
     docs = tmp_path / "cli_sample"
@@ -118,6 +124,40 @@ def test_cli_no_llm_flag(
     assert result.exit_code == 0
     assert "LLM skipped (--no-llm). Used fallback frontmatter." in result.output
     assert "Documents loaded: 1" in result.output
+
+
+def test_summary_printed_once(
+    cli_runner: CliRunner,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Assert summary metrics are printed exactly once when pipeline runs."""
+    fixture_dir = tmp_path / "summary_fixture"
+    fixture_dir.mkdir()
+    (fixture_dir / "index.md").write_text("# Doc\nSome text content.", encoding="utf-8")
+
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
+
+    # Stub LLM to return deterministic frontmatter
+    from unittest.mock import patch
+    from doc2skill.llm.base import FrontmatterResult
+
+    stub_frontmatter = FrontmatterResult(
+        description="Deterministic skill description.",
+        when_to_use="- When deterministic",
+        input_tokens=80,
+        output_tokens=25,
+    )
+
+    with patch(
+        "doc2skill.pipeline.graph.GeminiProvider.synthesize_frontmatter",
+        return_value=stub_frontmatter,
+    ):
+        result = cli_runner.invoke(app, ["build", str(fixture_dir), "--no-cache"])
+
+    assert result.exit_code == 0
+    assert result.output.count("Estimated input tokens") == 1
+    assert result.output.count("Actual tokens used") == 1
 
 
 def test_cli_summary_prints_estimated_tokens_exactly_once(
