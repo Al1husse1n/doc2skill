@@ -1,7 +1,10 @@
 import json
-from unittest.mock import MagicMock
+import logging
+from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+from google.genai import errors as genai_errors
 
 from doc2skill.ingest.base import Document
 from doc2skill.llm.base import FrontmatterResult
@@ -95,3 +98,84 @@ def test_gemini_provider_prompt_truncation():
     assert "Long Doc" in prompt
     assert "X" * 1500 not in prompt
     assert "X" * 500 in prompt
+
+
+def test_gemini_retry_on_429_then_200(caplog):
+    """Verify GeminiProvider retries on HTTP 429 and succeeds on subsequent attempt."""
+    mock_client = MagicMock()
+    mock_resp_429 = genai_errors.APIError(429, "Rate limit exceeded", None)
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "description": "Retried description.",
+            "when_to_use": "- When retry succeeds",
+        }
+    )
+    mock_response.usage_metadata.prompt_token_count = 100
+    mock_response.usage_metadata.candidates_token_count = 20
+
+    mock_client.models.generate_content.side_effect = [mock_resp_429, mock_response]
+
+    provider = GeminiProvider(api_key="test-key", client=mock_client)
+
+    with (
+        patch("time.sleep"),
+        caplog.at_level(logging.WARNING),
+    ):
+        result = provider.synthesize_frontmatter(
+            [Document(path="test.md", content="content", title="title")]
+        )
+
+    assert result.description == "Retried description."
+    assert mock_client.models.generate_content.call_count == 2
+    assert "Gemini retry 1/4" in caplog.text
+
+
+def test_gemini_no_retry_on_400():
+    """Verify GeminiProvider does NOT retry on HTTP 400."""
+    mock_client = MagicMock()
+    mock_resp_400 = genai_errors.APIError(400, "Bad Request", None)
+    mock_client.models.generate_content.side_effect = mock_resp_400
+
+    provider = GeminiProvider(api_key="test-key", client=mock_client)
+
+    with pytest.raises(genai_errors.APIError) as exc_info:
+        provider.synthesize_frontmatter(
+            [Document(path="test.md", content="content", title="title")]
+        )
+
+    assert exc_info.value.code == 400
+    assert mock_client.models.generate_content.call_count == 1
+
+
+def test_gemini_retry_on_httpx_timeout(caplog):
+    """Verify GeminiProvider retries on httpx.TimeoutException."""
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.text = json.dumps(
+        {
+            "description": "Recovered from timeout.",
+            "when_to_use": "- After timeout recovery",
+        }
+    )
+    mock_response.usage_metadata.prompt_token_count = 80
+    mock_response.usage_metadata.candidates_token_count = 15
+
+    mock_client.models.generate_content.side_effect = [
+        httpx.TimeoutException("Read timed out"),
+        mock_response,
+    ]
+
+    provider = GeminiProvider(api_key="test-key", client=mock_client)
+
+    with (
+        patch("time.sleep"),
+        caplog.at_level(logging.WARNING),
+    ):
+        result = provider.synthesize_frontmatter(
+            [Document(path="test.md", content="content", title="title")]
+        )
+
+    assert result.description == "Recovered from timeout."
+    assert mock_client.models.generate_content.call_count == 2
+    assert "Gemini retry 1/4" in caplog.text

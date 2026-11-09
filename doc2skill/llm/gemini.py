@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import re
 from collections.abc import Sequence
@@ -8,15 +9,60 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import httpx
 from google import genai
+from google.genai import errors as genai_errors
 from google.genai import types
 from pydantic import BaseModel, Field
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_random_exponential,
+)
 
 from doc2skill.ingest.base import Document
 from doc2skill.llm.base import FrontmatterResult
 
+logger = logging.getLogger(__name__)
+
 DEFAULT_MODEL = "gemini-2.5-flash"
 DOC_SNIPPET_MAX_CHARS = 500
+RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def is_retryable_gemini_error(exc: BaseException) -> bool:
+    """Return True if exception is a retryable transient Gemini API or network error."""
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError)):
+        return True
+    if isinstance(exc, genai_errors.APIError):
+        code = getattr(exc, "code", None) or getattr(exc, "status_code", None)
+        if code is not None:
+            try:
+                return int(code) in RETRY_STATUS_CODES
+            except (ValueError, TypeError):
+                pass
+        message = str(exc)
+        for status_code in RETRY_STATUS_CODES:
+            if str(status_code) in message:
+                return True
+        return False
+    return False
+
+
+def _log_gemini_retry(retry_state) -> None:
+    attempt = retry_state.attempt_number
+    exc = retry_state.outcome.exception()
+    logger.warning("Gemini retry %d/4: %s", attempt, exc)
+
+
+gemini_retry = retry(
+    retry=retry_if_exception(is_retryable_gemini_error),
+    wait=wait_random_exponential(multiplier=1, max=30),
+    stop=stop_after_attempt(4),
+    reraise=True,
+    before_sleep=_log_gemini_retry,
+)
 
 
 class FrontmatterSchema(BaseModel):
@@ -79,16 +125,37 @@ Documentation snippets:
 {combined_docs}
 """
 
+    @gemini_retry
+    def _call_count_tokens(self, prompt: str):
+        return self.client.models.count_tokens(
+            model=self.model,
+            contents=prompt,
+        )
+
+    @gemini_retry
+    def _call_generate_content(
+        self, prompt: str, config: types.GenerateContentConfig
+    ):
+        return self.client.models.generate_content(
+            model=self.model,
+            contents=prompt,
+            config=config,
+        )
+
     def count_tokens(self, prompt: str) -> int:
         """Pre-call token count using client.models.count_tokens with fallback."""
         try:
-            resp = self.client.models.count_tokens(
-                model=self.model,
-                contents=prompt,
-            )
+            resp = self._call_count_tokens(prompt)
             if hasattr(resp, "total_tokens") and resp.total_tokens is not None:
                 return int(resp.total_tokens)
-        except (OSError, RuntimeError, ValueError, AttributeError):
+        except (
+            OSError,
+            RuntimeError,
+            ValueError,
+            AttributeError,
+            genai_errors.APIError,
+            httpx.HTTPError,
+        ):
             # Fall back to length heuristic if network count fails
             return max(1, len(prompt) // 4)
         return max(1, len(prompt) // 4)
@@ -107,11 +174,7 @@ Documentation snippets:
             max_output_tokens=max_tokens,
         )
 
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=prompt,
-            config=config,
-        )
+        response = self._call_generate_content(prompt, config)
 
         raw_text = response.text or "{}"
         try:
