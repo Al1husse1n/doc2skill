@@ -1,22 +1,51 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 from doc2skill.ingest.base import Document
 
 DEFAULT_MAX_TOKENS = 50_000
 
 
-def estimate_tokens(text: str) -> int:
-    """Estimate token count for a text using ~4 characters per token heuristic."""
+def fallback_estimate_tokens(text: str) -> int:
+    """Heuristic token estimate (~4 characters per token)."""
     if not text:
         return 0
-    # Minimum of 1 token for non-empty text
     return max(1, len(text) // 4)
 
 
+def estimate_prompt_tokens(
+    documents: Sequence[Document],
+    provider: Any | None = None,
+) -> int:
+    """Pre-call estimate using provider count_tokens or fallback heuristic."""
+    if not documents:
+        return 0
+
+    if (
+        provider is not None
+        and hasattr(provider, "build_prompt")
+        and hasattr(provider, "count_tokens")
+    ):
+        try:
+            prompt = provider.build_prompt(documents)
+            return provider.count_tokens(prompt)
+        except (OSError, RuntimeError, ValueError, AttributeError):
+            pass
+
+    # Fallback heuristic across document contents
+    total_chars = sum(len(doc.content[:500]) for doc in documents)
+    return max(1, total_chars // 4)
+
+
+def estimate_tokens(text: str) -> int:
+    """Public helper for estimated token count."""
+    return fallback_estimate_tokens(text)
+
+
 def estimate_documents_tokens(documents: Sequence[Document]) -> int:
-    """Estimate total tokens across a collection of Documents."""
-    return sum(estimate_tokens(doc.content) for doc in documents)
+    """Public helper for document token estimation."""
+    return sum(fallback_estimate_tokens(doc.content) for doc in documents)
 
 
 @dataclass
@@ -27,9 +56,13 @@ class TokenBudget:
     estimated_tokens: int = 0
     actual_tokens: int = 0
 
-    def estimate(self, documents: Sequence[Document]) -> int:
+    def estimate(
+        self,
+        documents: Sequence[Document],
+        provider: Any | None = None,
+    ) -> int:
         """Calculate and store estimated tokens for the provided documents."""
-        self.estimated_tokens = estimate_documents_tokens(documents)
+        self.estimated_tokens = estimate_prompt_tokens(documents, provider=provider)
         return self.estimated_tokens
 
     def is_exceeded(self, tokens: int | None = None) -> bool:
@@ -38,11 +71,8 @@ class TokenBudget:
         return check_val > self.max_tokens
 
     def check(self, tokens: int | None = None) -> str | None:
-        """Return an error message if the budget is exceeded, or None."""
+        """Return error message if budget is exceeded before LLM spend."""
         check_val = self.estimated_tokens if tokens is None else tokens
         if check_val > self.max_tokens:
-            return (
-                f"Token budget exceeded: estimated {check_val} tokens "
-                f"exceeds maximum allowed {self.max_tokens} tokens."
-            )
+            return f"Budget exceeded: estimated {check_val} input tokens > max {self.max_tokens}. LLM call skipped."
         return None

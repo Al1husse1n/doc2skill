@@ -64,6 +64,29 @@ def test_emit_from_two_fixture_documents(
 
     # Check separator between documents
     assert "\n\n---\n\n" in skill_md
+    # Check source section
+    assert "## Source\n- guides/quickstart.md\n- api/endpoints.md" in skill_md
+
+
+def test_emit_with_synthesized_frontmatter(
+    tmp_path: Path, two_fixture_documents: list[Document]
+):
+    """Assert emit_skill uses synthesized frontmatter when provided."""
+    frontmatter = {
+        "description": "Synthesized API skill description.",
+        "when_to_use": "- When integrating APIs\n- When querying endpoints",
+    }
+    skill_md, _output_file = emit_skill(
+        two_fixture_documents,
+        skill_name="synth-skill",
+        output_dir=tmp_path,
+        frontmatter=frontmatter,
+    )
+    assert "description: Synthesized API skill description." in skill_md
+    assert (
+        "## When to use\n- When integrating APIs\n- When querying endpoints" in skill_md
+    )
+    assert "(placeholder — will be LLM-generated later)" not in skill_md
 
 
 def test_derive_skill_name():

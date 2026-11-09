@@ -67,22 +67,33 @@ def render_skill_md(
     documents: Sequence[Document],
     skill_name: str | None = None,
     source_path: str | Path | None = None,
+    frontmatter: dict[str, str] | None = None,
 ) -> str:
-    """Generate minimal SKILL.md markdown text from ingested documents."""
+    """Generate SKILL.md markdown text from ingested documents and optional frontmatter."""
     if not skill_name:
         if source_path:
             skill_name = derive_skill_name(source_path)
         else:
             skill_name = "skill"
 
-    description = extract_description(documents)
+    if frontmatter and frontmatter.get("description"):
+        description = frontmatter["description"].strip()
+        when_to_use = frontmatter.get(
+            "when_to_use", "(placeholder — will be LLM-generated later)"
+        ).strip()
+    else:
+        description = extract_description(documents)
+        when_to_use = "(placeholder — will be LLM-generated later)"
 
     doc_blocks: list[str] = []
+    source_list: list[str] = []
     for doc in documents:
         clean_content = doc.content.strip()
         doc_blocks.append(f"### {doc.path}\n\n{clean_content}")
+        source_list.append(f"- {doc.path}")
 
     reference_body = "\n\n---\n\n".join(doc_blocks)
+    source_body = "\n".join(source_list)
 
     return f"""---
 name: {skill_name}
@@ -92,10 +103,13 @@ description: {description}
 # {skill_name}
 
 ## When to use
-(placeholder — will be LLM-generated later)
+{when_to_use}
 
 ## Reference
 {reference_body}
+
+## Source
+{source_body}
 """
 
 
@@ -117,8 +131,9 @@ def emit_skill(
     skill_name: str | None = None,
     source_path: str | Path | None = None,
     output_dir: str | Path = "./output",
+    frontmatter: dict[str, str] | None = None,
 ) -> tuple[str, Path]:
-    """Render and write minimal SKILL.md for given documents."""
+    """Render and write SKILL.md for given documents and frontmatter."""
     if not skill_name:
         if source_path:
             skill_name = derive_skill_name(source_path)
@@ -126,7 +141,10 @@ def emit_skill(
             skill_name = "skill"
 
     skill_md = render_skill_md(
-        documents, skill_name=skill_name, source_path=source_path
+        documents,
+        skill_name=skill_name,
+        source_path=source_path,
+        frontmatter=frontmatter,
     )
     out_path = write_skill_file(skill_md, skill_name, output_dir=output_dir)
     return skill_md, out_path

@@ -26,7 +26,7 @@ def docs_directory(tmp_path: Path) -> Path:
 
 
 def test_pipeline_budget_guard_exceeded(docs_directory: Path, tmp_path: Path):
-    """Pipeline with max_tokens=1 returns an error in state."""
+    """Pipeline with max_tokens=1 returns an error in state and skips LLM."""
     graph = build_pipeline_graph()
     initial_state = create_initial_state(
         source_path=str(docs_directory),
@@ -37,9 +37,11 @@ def test_pipeline_budget_guard_exceeded(docs_directory: Path, tmp_path: Path):
     result = graph.invoke(initial_state)
 
     assert len(result["errors"]) > 0
-    assert any("Token budget exceeded" in err for err in result["errors"])
-    # File should not be emitted to disk when budget error occurs
-    assert result.get("output_path") is None
+    assert any("Budget exceeded" in err for err in result["errors"])
+    # File is emitted using fallback frontmatter
+    assert result.get("output_path") is not None
+    assert Path(result["output_path"]).exists()
+    assert "(placeholder — will be LLM-generated later)" in result["skill_md"]
 
 
 def test_pipeline_budget_guard_within_limit(docs_directory: Path, tmp_path: Path):

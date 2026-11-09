@@ -38,8 +38,8 @@ def test_cli_execution_and_caching(
     assert result1.exit_code == 0
     assert "Summary:" in result1.output
     assert "Documents loaded: 1" in result1.output
-    assert "Estimated tokens:" in result1.output
-    assert "Output path:" in result1.output
+    assert "Estimated input tokens:" in result1.output
+    assert "Output:" in result1.output
     assert "Cache hit" not in result1.output
 
     expected_skill = output_dir / "cli-sample" / "SKILL.md"
@@ -64,19 +64,57 @@ def test_cli_execution_and_caching(
     assert "Documents loaded: 1" in result3.output
 
 
-def test_cli_budget_exceeded_error(
+def test_cli_budget_exceeded_fallback(
     cli_docs_dir: Path,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Test CLI returns exit code 1 when token budget is exceeded."""
+    """Test CLI prints LLM skipped (budget) and emits with fallback when budget exceeded."""
     cache_dir = tmp_path / "cache"
+    output_dir = tmp_path / "output"
     monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(cache_dir))
 
     result = runner.invoke(
         app,
-        [str(cli_docs_dir), "--max-tokens", "1", "--no-cache"],
+        [
+            str(cli_docs_dir),
+            "--output",
+            str(output_dir),
+            "--max-tokens",
+            "1",
+            "--no-cache",
+        ],
     )
-    assert result.exit_code == 1
-    assert "Errors encountered" in result.output
-    assert "Token budget exceeded" in result.output
+    assert result.exit_code == 0
+    assert "LLM skipped (budget). Used fallback frontmatter." in result.output
+    assert "Summary:" in result.output
+
+    emitted_skill = output_dir / "cli-sample" / "SKILL.md"
+    assert emitted_skill.exists()
+    content = emitted_skill.read_text(encoding="utf-8")
+    assert "(placeholder — will be LLM-generated later)" in content
+
+
+def test_cli_no_llm_flag(
+    cli_docs_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Test CLI --no-llm flag forces fallback frontmatter without errors."""
+    cache_dir = tmp_path / "cache"
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(cache_dir))
+
+    result = runner.invoke(
+        app,
+        [
+            str(cli_docs_dir),
+            "--output",
+            str(output_dir),
+            "--no-llm",
+            "--no-cache",
+        ],
+    )
+    assert result.exit_code == 0
+    assert "LLM skipped (--no-llm). Used fallback frontmatter." in result.output
+    assert "Documents loaded: 1" in result.output

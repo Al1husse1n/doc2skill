@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from doc2skill.ingest.base import Document
 
@@ -12,16 +12,27 @@ class PipelineState(TypedDict, total=False):
     skill_md: str | None
     estimated_tokens: int
     actual_tokens: int
+    llm_input_tokens: int
+    llm_output_tokens: int
     errors: list[str]
+    warnings: list[str]
     max_tokens: int
     output_dir: str
     output_path: str | None
+    frontmatter: dict[str, str] | None
+    skip_llm: bool
+    no_llm: bool
+    model: str
+    llm_provider: Any
 
 
 def create_initial_state(
     source_path: str,
     max_tokens: int = 50_000,
     output_dir: str = "./output",
+    no_llm: bool = False,
+    model: str = "gemini-2.5-flash",
+    llm_provider: Any = None,
 ) -> PipelineState:
     """Helper to initialize a fresh PipelineState dictionary."""
     return {
@@ -31,8 +42,16 @@ def create_initial_state(
         "skill_md": None,
         "estimated_tokens": 0,
         "actual_tokens": 0,
+        "llm_input_tokens": 0,
+        "llm_output_tokens": 0,
         "errors": [],
+        "warnings": [],
         "max_tokens": max_tokens,
         "output_dir": output_dir,
         "output_path": None,
+        "frontmatter": None,
+        "skip_llm": False,
+        "no_llm": no_llm,
+        "model": model,
+        "llm_provider": llm_provider,
     }

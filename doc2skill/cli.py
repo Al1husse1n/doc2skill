@@ -1,9 +1,8 @@
 import warnings
-
-warnings.filterwarnings("ignore", message=".*allowed_objects.*")
-
 from pathlib import Path
 from typing import Annotated
+
+warnings.filterwarnings("ignore", message=".*allowed_objects.*")
 
 import typer
 
@@ -66,11 +65,24 @@ def main(
             help="Bypass disk cache and re-run pipeline.",
         ),
     ] = False,
+    no_llm: Annotated[
+        bool,
+        typer.Option(
+            "--no-llm",
+            help="Force fallback frontmatter without making LLM calls.",
+        ),
+    ] = False,
+    model: Annotated[
+        str,
+        typer.Option(
+            "--model",
+            help="Gemini model name for frontmatter synthesis.",
+        ),
+    ] = "gemini-2.5-flash",
 ) -> None:
     """Ingest markdown documentation and emit a SKILL.md agent skill."""
     skill_name = derive_skill_name(source_path)
-    config_hash = f"max_tokens={max_tokens}"
-    key = cache.cache_key(str(source_path), config_hash)
+    key = cache.cache_key(str(source_path), max_tokens=max_tokens, model=model)
 
     # Check cache unless --no-cache is specified
     cached_content = None if no_cache else cache.get(key)
@@ -81,8 +93,8 @@ def main(
 
         typer.echo("Summary:")
         typer.echo("  Documents loaded: cached")
-        typer.echo(f"  Estimated tokens: {est_tokens}")
-        typer.echo(f"  Output path: {out_file}")
+        typer.echo(f"  Estimated input tokens: {est_tokens}")
+        typer.echo(f"  Output: {out_file}")
         return
 
     # Cache miss or bypass: run LangGraph pipeline
@@ -91,19 +103,32 @@ def main(
         source_path=str(source_path),
         max_tokens=max_tokens,
         output_dir=str(output),
+        no_llm=no_llm,
+        model=model,
     )
 
     result = graph.invoke(initial_state)
 
-    if result.get("errors"):
+    # Check if budget guard skipped the LLM
+    has_budget_error = any("Budget exceeded" in err for err in result.get("errors", []))
+    fatal_errors = [
+        err for err in result.get("errors", []) if "Budget exceeded" not in err
+    ]
+
+    if fatal_errors:
         typer.secho(
             "Errors encountered during pipeline execution:",
             fg=typer.colors.RED,
             err=True,
         )
-        for error in result["errors"]:
+        for error in fatal_errors:
             typer.secho(f"  - {error}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
+
+    if has_budget_error:
+        typer.echo("LLM skipped (budget). Used fallback frontmatter.")
+    elif no_llm:
+        typer.echo("LLM skipped (--no-llm). Used fallback frontmatter.")
 
     skill_md = result.get("skill_md", "")
     output_path = result.get("output_path") or str(
@@ -114,12 +139,19 @@ def main(
     cache.set(key, skill_md)
 
     docs_loaded = len(result.get("documents", []))
-    estimated_tokens = result.get("estimated_tokens", 0)
+    estimated_input_tokens = result.get("estimated_tokens", 0)
+    actual_tokens = result.get("actual_tokens", 0)
+    in_tokens = result.get("llm_input_tokens", 0)
+    out_tokens = result.get("llm_output_tokens", 0)
 
     typer.echo("Summary:")
     typer.echo(f"  Documents loaded: {docs_loaded}")
-    typer.echo(f"  Estimated tokens: {estimated_tokens}")
-    typer.echo(f"  Output path: {output_path}")
+    typer.echo(f"  Estimated input tokens: {estimated_input_tokens}")
+    if actual_tokens > 0:
+        typer.echo(
+            f"  Actual tokens used: {actual_tokens} (in: {in_tokens}, out: {out_tokens})"
+        )
+    typer.echo(f"  Output: {output_path}")
 
 
 @app.command(name="version", hidden=True)

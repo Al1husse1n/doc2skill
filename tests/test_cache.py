@@ -31,15 +31,18 @@ def test_cache_set_and_get(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_cache_key_generation():
-    """Verify cache_key produces SHA256 hex string based on abs_path and config_hash."""
+    """Verify cache_key produces SHA256 hex string based on abs_path, max_tokens, and model."""
     path1 = "docs/guide"
-    key1 = cache.cache_key(path1, "config_a")
-    key2 = cache.cache_key(path1, "config_a")
-    key3 = cache.cache_key(path1, "config_b")
+    key1 = cache.cache_key(path1, 50000, "gemini-2.5-flash")
+    key2 = cache.cache_key(path1, 50000, "gemini-2.5-flash")
+    key3 = cache.cache_key(path1, 50000, "other-model")
+    key4 = cache.cache_key(path1, 10000, "gemini-2.5-flash")
 
     # Deterministic for same inputs
     assert key1 == key2
     # 64 hex characters (SHA256)
     assert len(key1) == 64
-    # Different configs yield different keys
+    # Different model yields different key
     assert key1 != key3
+    # Different max_tokens yields different key
+    assert key1 != key4

@@ -20,13 +20,15 @@ def get_cache_dir(custom_dir: Path | str | None = None) -> Path:
     return target
 
 
-def cache_key(input_path: str, config_hash: str = "") -> str:
-    """Compute SHA256 of (abs_path, config_hash)."""
-    abs_path = str(Path(input_path).resolve())
-    hasher = hashlib.sha256()
-    hasher.update(abs_path.encode("utf-8"))
-    hasher.update(config_hash.encode("utf-8"))
-    return hasher.hexdigest()
+def cache_key(
+    source_path: str,
+    max_tokens: int = 50_000,
+    model: str = "gemini-2.5-flash",
+) -> str:
+    """Compute SHA256 of (abs_path, max_tokens, model)."""
+    abs_path = str(Path(source_path).resolve())
+    data = f"{abs_path}:{max_tokens}:{model}".encode()
+    return hashlib.sha256(data).hexdigest()
 
 
 def get(key: str, cache_dir: Path | str | None = None) -> str | None:
