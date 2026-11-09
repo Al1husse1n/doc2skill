@@ -24,7 +24,7 @@ dev = [
 doc2skill = "doc2skill.cli:app"
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "evals"]
 filterwarnings = [
     "ignore:.*allowed_objects.*:Warning",
 ]
