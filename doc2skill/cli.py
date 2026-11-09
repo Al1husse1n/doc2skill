@@ -1,3 +1,4 @@
+import asyncio
 import warnings
 from pathlib import Path
 from typing import Annotated
@@ -9,8 +10,12 @@ import typer
 from doc2skill.budget.guard import DEFAULT_MAX_TOKENS, estimate_tokens
 from doc2skill.cache import disk as cache
 from doc2skill.emit.skill import derive_skill_name, write_skill_file
+from doc2skill.ingest.coalesce import AsyncSingleFlight
+from doc2skill.ingest.url import load_url
 from doc2skill.pipeline.graph import build_pipeline_graph
 from doc2skill.pipeline.state import create_initial_state
+
+_single_flight = AsyncSingleFlight()
 
 
 class DefaultGroup(typer.core.TyperGroup):
@@ -33,13 +38,9 @@ app = typer.Typer(
 @app.command(name="build")
 def main(
     source_path: Annotated[
-        Path,
+        str,
         typer.Argument(
-            help="Path to the documentation directory to ingest.",
-            exists=True,
-            file_okay=False,
-            dir_okay=True,
-            resolve_path=True,
+            help="Path to documentation directory or URL to ingest.",
         ),
     ],
     output: Annotated[
@@ -58,6 +59,20 @@ def main(
             help="Maximum allowed token budget.",
         ),
     ] = DEFAULT_MAX_TOKENS,
+    max_pages: Annotated[
+        int,
+        typer.Option(
+            "--max-pages",
+            help="Maximum pages to ingest from URL/sitemap.",
+        ),
+    ] = 100,
+    no_sitemap: Annotated[
+        bool,
+        typer.Option(
+            "--no-sitemap",
+            help="Disable sitemap discovery for URLs.",
+        ),
+    ] = False,
     no_cache: Annotated[
         bool,
         typer.Option(
@@ -80,9 +95,22 @@ def main(
         ),
     ] = "gemini-2.5-flash",
 ) -> None:
-    """Ingest markdown documentation and emit a SKILL.md agent skill."""
+    """Ingest markdown documentation or URL and emit a SKILL.md agent skill."""
+    is_url = source_path.startswith(("http://", "https://"))
+    source_type = "url" if is_url else "markdown_dir"
+
+    if not is_url:
+        local_dir = Path(source_path)
+        if not local_dir.exists() or not local_dir.is_dir():
+            raise typer.BadParameter(f"Directory '{source_path}' does not exist.")
+
     skill_name = derive_skill_name(source_path)
-    key = cache.cache_key(str(source_path), max_tokens=max_tokens, model=model)
+    key = cache.cache_key(
+        str(source_path),
+        max_tokens=max_tokens,
+        model=model,
+        source_type=source_type,
+    )
 
     # Check cache unless --no-cache is specified
     cached_content = None if no_cache else cache.get(key)
@@ -92,12 +120,40 @@ def main(
         est_tokens = estimate_tokens(cached_content)
 
         typer.echo("Summary:")
+        typer.echo(f"  Source: {source_path}")
         typer.echo("  Documents loaded: cached")
         typer.echo(f"  Estimated input tokens: {est_tokens}")
         typer.echo(f"  Output: {out_file}")
         return
 
-    # Cache miss or bypass: run LangGraph pipeline
+    # Cache miss or bypass: load content and run LangGraph pipeline
+    loaded_documents = None
+    if is_url:
+        async def fetch_url():
+            return await load_url(
+                source_path,
+                max_pages=max_pages,
+                follow_sitemap=not no_sitemap,
+            )
+
+        try:
+            loaded_documents = asyncio.run(_single_flight.do(source_path, fetch_url))
+        except Exception as exc:
+            typer.secho(
+                f"Error fetching URL '{source_path}': {exc}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
+        if not loaded_documents:
+            typer.secho(
+                f"Error: No documents could be extracted from {source_path}",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=1)
+
     graph = build_pipeline_graph()
     initial_state = create_initial_state(
         source_path=str(source_path),
@@ -105,15 +161,13 @@ def main(
         output_dir=str(output),
         no_llm=no_llm,
         model=model,
+        documents=loaded_documents,
     )
 
     result = graph.invoke(initial_state)
 
     # Check if budget guard skipped the LLM or if LLM call failed
     has_budget_error = any("Budget exceeded" in err for err in result.get("errors", []))
-    has_llm_error = any(
-        "LLM synthesis failed" in err for err in result.get("errors", [])
-    )
     has_llm_error = any(
         "LLM synthesis failed" in err for err in result.get("errors", [])
     )
@@ -154,7 +208,20 @@ def main(
     in_tokens = result.get("llm_input_tokens", 0)
     out_tokens = result.get("llm_output_tokens", 0)
 
+    if is_url:
+        sitemap_mode = (
+            f"sitemap, {docs_loaded} pages"
+            if (not no_sitemap and docs_loaded > 1)
+            or source_path.endswith(".xml")
+            or "sitemap" in source_path.lower()
+            else "single page"
+        )
+        source_desc = f"{source_path} ({sitemap_mode})"
+    else:
+        source_desc = str(source_path)
+
     typer.echo("Summary:")
+    typer.echo(f"  Source: {source_desc}")
     typer.echo(f"  Documents loaded: {docs_loaded}")
     typer.echo(f"  Estimated input tokens: {estimated_input_tokens}")
     if actual_tokens > 0:

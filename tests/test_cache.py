@@ -46,3 +46,7 @@ def test_cache_key_generation():
     assert key1 != key3
     # Different max_tokens yields different key
     assert key1 != key4
+
+    # Different source_type yields different key
+    key5 = cache.cache_key(path1, 50000, "gemini-2.5-flash", "url")
+    assert key1 != key5

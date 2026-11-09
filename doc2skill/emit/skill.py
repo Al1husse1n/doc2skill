@@ -1,6 +1,7 @@
 import re
 from collections.abc import Sequence
 from pathlib import Path
+from urllib.parse import urlparse
 
 from doc2skill.ingest.base import Document
 
@@ -8,12 +9,24 @@ DEFAULT_MAX_DESC_LENGTH = 200
 
 
 def derive_skill_name(source_path: str | Path) -> str:
-    """Derive skill name from a directory path (lowercase kebab-case)."""
-    raw_name = Path(source_path).resolve().name.strip()
+    """Derive skill name from a directory path or URL (lowercase kebab-case)."""
+    src_str = str(source_path).strip()
+    if src_str.startswith(("http://", "https://")):
+        parsed = urlparse(src_str)
+        clean_path = parsed.path.strip("/")
+        if clean_path and not clean_path.endswith(".xml"):
+            raw_name = Path(clean_path).name or clean_path
+        else:
+            host = parsed.netloc.split(":")[0].replace("www.", "")
+            parts = host.split(".")
+            raw_name = parts[0] if len(parts) > 1 else host
+    else:
+        raw_name = Path(source_path).resolve().name.strip()
+
     if not raw_name or raw_name == ".":
         raw_name = "skill"
-    # Convert spaces/underscores to hyphens and keep alphanumeric/hyphen
-    slug = re.sub(r"[_\s]+", "-", raw_name)
+    # Convert spaces/underscores/dots to hyphens and keep alphanumeric/hyphen
+    slug = re.sub(r"[_\s.]+", "-", raw_name)
     slug = re.sub(r"[^a-zA-Z0-9-]", "", slug).strip("-").lower()
     return slug or "skill"
 

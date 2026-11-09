@@ -21,13 +21,17 @@ def get_cache_dir(custom_dir: Path | str | None = None) -> Path:
 
 
 def cache_key(
-    source_path: str,
+    source: str,
     max_tokens: int = 50_000,
     model: str = "gemini-2.5-flash",
+    source_type: str = "markdown_dir",
 ) -> str:
-    """Compute SHA256 of (abs_path, max_tokens, model)."""
-    abs_path = str(Path(source_path).resolve())
-    data = f"{abs_path}:{max_tokens}:{model}".encode()
+    """Compute SHA256 of (canonical_source, max_tokens, model, source_type)."""
+    if source_type == "url" or source.startswith(("http://", "https://")):
+        canonical = source.strip()
+    else:
+        canonical = str(Path(source).resolve())
+    data = f"{canonical}:{max_tokens}:{model}:{source_type}".encode()
     return hashlib.sha256(data).hexdigest()
 
 

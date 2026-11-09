@@ -118,3 +118,98 @@ def test_cli_no_llm_flag(
     assert result.exit_code == 0
     assert "LLM skipped (--no-llm). Used fallback frontmatter." in result.output
     assert "Documents loaded: 1" in result.output
+
+
+def test_cli_summary_prints_estimated_tokens_exactly_once(
+    cli_docs_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verify that 'Estimated input tokens' appears exactly once in CLI output."""
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
+
+    result = runner.invoke(
+        app,
+        [str(cli_docs_dir), "--output", str(output_dir), "--no-llm", "--no-cache"],
+    )
+    assert result.exit_code == 0
+    # Assert 'Estimated input tokens' appears exactly once
+    assert result.output.count("Estimated input tokens") == 1
+
+
+def test_cli_url_single_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verify CLI accepts URL source and outputs single-page summary."""
+    from unittest.mock import AsyncMock, patch
+
+    from doc2skill.ingest.base import Document
+
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
+
+    mock_doc = Document(
+        path="https://example.com/guide",
+        content="# Web Guide\nSome useful content.",
+        title="Web Guide",
+    )
+
+    with patch(
+        "doc2skill.cli.load_url", new_callable=AsyncMock, return_value=[mock_doc]
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://example.com/guide",
+                "--output",
+                str(output_dir),
+                "--no-llm",
+                "--no-cache",
+                "--no-sitemap",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Source: https://example.com/guide (single page)" in result.output
+    assert "Documents loaded: 1" in result.output
+    assert result.output.count("Estimated input tokens") == 1
+    assert (output_dir / "guide" / "SKILL.md").exists()
+
+
+def test_cli_url_sitemap_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Verify CLI with sitemap outputs sitemap page count in summary."""
+    from unittest.mock import AsyncMock, patch
+
+    from doc2skill.ingest.base import Document
+
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
+
+    docs = [
+        Document(
+            path="https://example.com/p1", content="# P1\nC1", title="Page 1"
+        ),
+        Document(
+            path="https://example.com/p2", content="# P2\nC2", title="Page 2"
+        ),
+    ]
+
+    with patch(
+        "doc2skill.cli.load_url", new_callable=AsyncMock, return_value=docs
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "https://example.com/docs",
+                "--output",
+                str(output_dir),
+                "--no-llm",
+                "--no-cache",
+                "--max-pages",
+                "50",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Source: https://example.com/docs (sitemap, 2 pages)" in result.output
+    assert "Documents loaded: 2" in result.output
+    assert result.output.count("Estimated input tokens") == 1

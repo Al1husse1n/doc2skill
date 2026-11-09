@@ -12,15 +12,33 @@ from doc2skill.pipeline.state import PipelineState
 
 
 def load_documents_node(state: PipelineState) -> dict:
-    """Load markdown documents from state source_path."""
+    """Load markdown documents from state source_path or keep preloaded documents."""
+    preloaded = state.get("documents")
+    if preloaded:
+        return {
+            "documents": preloaded,
+            "distilled": list(preloaded),
+            "errors": list(state.get("errors", [])),
+        }
+
     source_path = state.get("source_path", "")
     errors = list(state.get("errors", []))
 
-    try:
-        documents = load_markdown_directory(source_path)
-    except (OSError, ValueError) as exc:
-        errors.append(f"Failed to load documents: {exc}")
-        return {"documents": [], "errors": errors, "estimated_tokens": 0}
+    if source_path.startswith(("http://", "https://")):
+        try:
+            import asyncio
+            from doc2skill.ingest.url import load_url
+
+            documents = asyncio.run(load_url(source_path))
+        except (OSError, ValueError, RuntimeError) as exc:
+            errors.append(f"Failed to load URL documents: {exc}")
+            return {"documents": [], "errors": errors, "estimated_tokens": 0}
+    else:
+        try:
+            documents = load_markdown_directory(source_path)
+        except (OSError, ValueError) as exc:
+            errors.append(f"Failed to load documents: {exc}")
+            return {"documents": [], "errors": errors, "estimated_tokens": 0}
 
     return {
         "documents": documents,

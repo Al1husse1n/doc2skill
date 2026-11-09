@@ -34,13 +34,15 @@ def create_initial_state(
     no_llm: bool = False,
     model: str | None = None,
     llm_provider: Any = None,
+    documents: list[Document] | None = None,
 ) -> PipelineState:
     """Helper to initialize a fresh PipelineState dictionary."""
     selected_model = model or os.getenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
+    docs = list(documents) if documents else []
     return {
         "source_path": source_path,
-        "documents": [],
-        "distilled": [],
+        "documents": docs,
+        "distilled": list(docs),
         "skill_md": None,
         "estimated_tokens": 0,
         "actual_tokens": 0,
