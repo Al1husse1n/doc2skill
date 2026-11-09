@@ -1,4 +1,5 @@
 import asyncio
+import os
 import warnings
 from pathlib import Path
 from typing import Annotated
@@ -88,14 +89,15 @@ def main(
         ),
     ] = False,
     model: Annotated[
-        str,
+        str | None,
         typer.Option(
             "--model",
             help="Gemini model name for frontmatter synthesis.",
         ),
-    ] = "gemini-2.5-flash",
+    ] = None,
 ) -> None:
     """Ingest markdown documentation or URL and emit a SKILL.md agent skill."""
+    selected_model = model or os.getenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
     is_url = source_path.startswith(("http://", "https://"))
     source_type = "url" if is_url else "markdown_dir"
 
@@ -108,7 +110,7 @@ def main(
     key = cache.cache_key(
         str(source_path),
         max_tokens=max_tokens,
-        model=model,
+        model=selected_model,
         source_type=source_type,
     )
 
@@ -160,7 +162,7 @@ def main(
         max_tokens=max_tokens,
         output_dir=str(output),
         no_llm=no_llm,
-        model=model,
+        model=selected_model,
         documents=loaded_documents,
     )
 

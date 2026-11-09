@@ -102,6 +102,7 @@ async def extract_page(url: str, client: httpx.AsyncClient) -> Document | None:
     extracted = trafilatura.extract(
         html,
         output_format="markdown",
+        include_formatting=True,
         include_links=False,
         include_images=False,
     )
@@ -112,9 +113,14 @@ async def extract_page(url: str, client: httpx.AsyncClient) -> Document | None:
 
     title = derive_url_title(html, extracted, url)
 
+    # Prepend derived title if extracted markdown does not already contain a top-level heading
+    clean_extracted = extracted.strip()
+    if not re.search(r"^#+\s+", clean_extracted, re.MULTILINE):
+        clean_extracted = f"# {title}\n\n{clean_extracted}"
+
     return Document(
         path=url,
-        content=extracted.strip(),
+        content=clean_extracted,
         title=title,
         metadata={"source_type": "url", "url": url},
     )
