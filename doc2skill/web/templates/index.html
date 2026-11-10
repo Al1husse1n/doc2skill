@@ -172,7 +172,12 @@
         const outTok = Number(data.output_tokens || 0).toLocaleString();
         addMetric(`${inTok} input tokens, ${outTok} output tokens`);
       } else if (eventName === "complete") {
-        if (!steps.llm.classList.contains("done")) {
+        if (data.cache_hit) {
+          setStepState("ingest", "skipped");
+          setStepState("budget", "skipped");
+          setStepState("llm", "skipped");
+          addMetric("Cache hit: loaded from disk cache");
+        } else if (!steps.llm.classList.contains("done")) {
           setStepState("llm", "skipped");
         }
         setStepState("render", "done");
@@ -276,3 +281,4 @@
   </script>
 </body>
 </html>
+

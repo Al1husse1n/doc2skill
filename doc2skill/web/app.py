@@ -110,6 +110,7 @@ def create_app() -> FastAPI:
                 source_type=payload.source_type,
                 max_pages=payload.max_pages,
                 max_tokens=payload.max_tokens,
+                no_cache=payload.no_cache,
                 no_llm=payload.no_llm,
                 request=request,
             ),

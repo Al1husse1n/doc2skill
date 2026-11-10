@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -7,6 +8,12 @@ from doc2skill.ingest.base import Document
 from doc2skill.llm.base import FrontmatterResult
 from doc2skill.llm.gemini import GeminiProvider
 from doc2skill.web.app import create_app
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isolate disk cache per test so ~/.cache/doc2skill is never read or polluted."""
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "web_cache"))
 
 
 def _parse_sse(raw_text: str) -> list[tuple[str, dict]]:
@@ -144,6 +151,7 @@ async def test_build_sse_success(
 
     complete_payload = dict(parsed)["complete"]
     assert complete_payload["skill_md"].startswith("---")
+    assert complete_payload["cache_hit"] is False
     assert "Synthesized skill from mocked fake docs." in complete_payload["skill_md"]
 
 
@@ -353,5 +361,110 @@ async def test_build_respects_max_pages(monkeypatch: pytest.MonkeyPatch):
 
     assert resp.status_code == 200
     assert captured["max_pages"] == 7
+
+
+@pytest.mark.asyncio
+async def test_build_cache_hit(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake_docs: list[Document]
+):
+    """Verify web builds use disk cache cleanly and honor no_cache=true (skip read & write)."""
+    cache_dir = tmp_path / "custom_cache"
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(cache_dir))
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
+    monkeypatch.setenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
+
+    async def fake_load_url(url: str, max_pages: int = 100):
+        return fake_docs
+
+    llm_calls = 0
+
+    def fake_count_tokens(self, prompt: str) -> int:
+        return 100
+
+    def fake_synthesize(self, documents, max_tokens: int = 1000) -> FrontmatterResult:
+        nonlocal llm_calls
+        llm_calls += 1
+        return FrontmatterResult(
+            description=f"Synthesized skill run {llm_calls}.",
+            when_to_use="- When testing cache hit",
+            input_tokens=90,
+            output_tokens=20,
+        )
+
+    monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
+    monkeypatch.setattr(GeminiProvider, "count_tokens", fake_count_tokens)
+    monkeypatch.setattr(GeminiProvider, "synthesize_frontmatter", fake_synthesize)
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        # 1. First POST with no_cache=false -> cache miss, LLM called once
+        r1 = await client.post(
+            "/api/build",
+            json={
+                "source": "https://cached-docs.example.com/",
+                "source_type": "url",
+                "max_pages": 50,
+                "max_tokens": 50_000,
+                "no_cache": False,
+            },
+        )
+        assert r1.status_code == 200
+        p1 = dict(_parse_sse(r1.text))
+        assert llm_calls == 1
+        assert p1["complete"]["cache_hit"] is False
+        assert "Synthesized skill run 1." in p1["complete"]["skill_md"]
+
+        # 2. Second POST with no_cache=false -> cache hit, LLM NOT called
+        r2 = await client.post(
+            "/api/build",
+            json={
+                "source": "https://cached-docs.example.com/",
+                "source_type": "url",
+                "max_pages": 50,
+                "max_tokens": 50_000,
+                "no_cache": False,
+            },
+        )
+        assert r2.status_code == 200
+        p2 = dict(_parse_sse(r2.text))
+        assert llm_calls == 1
+        assert p2["complete"]["cache_hit"] is True
+        assert "Synthesized skill run 1." in p2["complete"]["skill_md"]
+
+        # 3. Third POST with no_cache=true -> skips read AND write, LLM called again
+        r3 = await client.post(
+            "/api/build",
+            json={
+                "source": "https://cached-docs.example.com/",
+                "source_type": "url",
+                "max_pages": 50,
+                "max_tokens": 50_000,
+                "no_cache": True,
+            },
+        )
+        assert r3.status_code == 200
+        p3 = dict(_parse_sse(r3.text))
+        assert llm_calls == 2
+        assert p3["complete"]["cache_hit"] is False
+        assert "Synthesized skill run 2." in p3["complete"]["skill_md"]
+
+        # 4. Verify third POST skipped writing by posting no_cache=false -> still returns run 1
+        r4 = await client.post(
+            "/api/build",
+            json={
+                "source": "https://cached-docs.example.com/",
+                "source_type": "url",
+                "max_pages": 50,
+                "max_tokens": 50_000,
+                "no_cache": False,
+            },
+        )
+        assert r4.status_code == 200
+        p4 = dict(_parse_sse(r4.text))
+        assert llm_calls == 2
+        assert p4["complete"]["cache_hit"] is True
+        assert "Synthesized skill run 1." in p4["complete"]["skill_md"]
+
 
 

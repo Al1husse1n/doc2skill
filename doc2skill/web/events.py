@@ -1,12 +1,15 @@
 import asyncio
 import json
+import os
 import tempfile
 from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import Request
 
+from doc2skill.cache import disk as cache
 from doc2skill.emit.skill import derive_skill_name
+from doc2skill.llm.gemini import DEFAULT_MODEL
 from doc2skill.pipeline.graph import build_pipeline_graph
 from doc2skill.pipeline.state import create_initial_state
 
@@ -135,6 +138,7 @@ def _map_node_update(
                     {
                         "skill_name": skill_name,
                         "skill_md": skill_md,
+                        "cache_hit": False,
                     },
                 )
             ],
@@ -150,11 +154,33 @@ async def pipeline_event_stream(
     source_type: str = "url",
     max_pages: int = 100,
     max_tokens: int = 50_000,
+    no_cache: bool = False,
     no_llm: bool = False,
     request: Request | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Stream LangGraph pipeline execution updates as SSE events."""
     yield sse_event("start", {"source": source, "source_type": source_type})
+
+    selected_model = os.environ.get("DOC2SKILL_LLM_MODEL") or DEFAULT_MODEL
+    key = cache.cache_key(
+        source,
+        max_tokens=max_tokens,
+        model=selected_model,
+        source_type=source_type,
+    )
+
+    cached_skill = None if no_cache else cache.get(key)
+    if cached_skill is not None:
+        yield sse_event(
+            "complete",
+            {
+                "skill_name": derive_skill_name(source),
+                "skill_md": cached_skill,
+                "cache_hit": True,
+            },
+        )
+        return
+
     yield sse_event("ingest_progress", {"status": "loading"})
 
     current_stage = "ingest"
@@ -167,9 +193,10 @@ async def pipeline_event_stream(
             max_tokens=max_tokens,
             output_dir=tmp_dir,
             no_llm=no_llm,
+            model=selected_model,
             max_pages=max_pages,
         )
-        model_name = str(state.get("model", "gemini-2.5-flash"))
+        model_name = str(state.get("model", selected_model))
 
         stream = graph.astream(state, stream_mode="updates")
         try:
@@ -189,6 +216,11 @@ async def pipeline_event_stream(
                     model_name=model_name,
                     no_llm=no_llm,
                 )
+                if node_name == "emit_skill" and not no_cache:
+                    skill_md = payload.get("skill_md") or ""
+                    if skill_md:
+                        cache.set(key, skill_md)
+
                 for ev in events:
                     yield ev
 
