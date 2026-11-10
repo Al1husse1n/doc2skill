@@ -9,8 +9,8 @@ from doc2skill.pipeline.state import create_initial_state
 
 
 @pytest.mark.skipif(
-    not os.environ.get("GEMINI_API_KEY"),
-    reason="GEMINI_API_KEY not set in environment",
+    not os.getenv("RUN_LIVE_TESTS") or not os.getenv("GEMINI_API_KEY"),
+    reason="Live LLM test (set RUN_LIVE_TESTS=1 and GEMINI_API_KEY)",
 )
 def test_gemini_frontmatter_eval(tmp_path: Path):
     """End-to-end evaluation using real Gemini API on stripe_like documentation fixture."""
