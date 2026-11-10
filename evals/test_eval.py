@@ -3,9 +3,6 @@ import re
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from doc2skill.pipeline.graph import build_pipeline_graph
 from doc2skill.pipeline.state import create_initial_state

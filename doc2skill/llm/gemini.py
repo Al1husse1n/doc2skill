@@ -5,10 +5,6 @@ import re
 from collections.abc import Sequence
 from typing import Any
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 import httpx
 from google import genai
 from google.genai import errors as genai_errors

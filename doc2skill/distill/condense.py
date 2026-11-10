@@ -6,14 +6,11 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
-from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
 from doc2skill.ingest.base import Document
 from doc2skill.llm.gemini import DEFAULT_MODEL, gemini_retry
-
-load_dotenv()
 
 logger = logging.getLogger(__name__)
 

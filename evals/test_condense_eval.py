@@ -3,9 +3,6 @@ import re
 from pathlib import Path
 
 import pytest
-from dotenv import load_dotenv
-
-load_dotenv()
 
 from doc2skill.budget.guard import estimate_tokens
 from doc2skill.pipeline.graph import build_pipeline_graph
@@ -114,3 +111,4 @@ def test_httpx_docs_condensation_eval(tmp_path: Path):
     assert baseline_skill_tokens > 15_000, (
         f"Expected uncondensed baseline > 15,000 tokens, got {baseline_skill_tokens}"
     )
+
