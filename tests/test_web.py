@@ -166,6 +166,8 @@ async def test_build_sse_success(
     complete_payload = dict(parsed)["complete"]
     assert complete_payload["skill_md"].startswith("---")
     assert complete_payload["cache_hit"] is False
+    assert complete_payload["truncated"] is False
+    assert "dropped_documents" not in complete_payload
     assert "Synthesized skill from mocked fake docs." in complete_payload["skill_md"]
 
 
@@ -498,6 +500,167 @@ async def test_build_cache_hit(
         assert llm_calls == 2
         assert p4["complete"]["cache_hit"] is True
         assert "Synthesized skill run 1." in p4["complete"]["skill_md"]
+
+
+@pytest.mark.asyncio
+async def test_build_sse_truncated(monkeypatch: pytest.MonkeyPatch):
+    """Mock 100 docs exceeding context limit -> assert truncate_warning and complete.dropped_documents."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
+    monkeypatch.setenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
+
+    # 100 fake docs (~10k tokens each -> ~1M tokens total > 500k context limit)
+    huge_docs = [
+        Document(
+            path=f"https://docs.example.com/deep/page_{i:02d}"
+            if i >= 50
+            else f"https://docs.example.com/page_{i:02d}",
+            content="Z" * 40_000,
+            title=f"Page {i}",
+        )
+        for i in range(100)
+    ]
+
+    async def fake_load_url(url: str, max_pages: int = 100):
+        return huge_docs
+
+    def fake_count_tokens(self, prompt: str) -> int:
+        # Realistic count for budget_guard
+        return 100 if "Documentation snippets" in prompt else 200_000
+
+    def fake_synthesize(self, documents, max_tokens: int = 1000) -> FrontmatterResult:
+        return FrontmatterResult(
+            description="Truncated docs skill.",
+            when_to_use="- When working with truncated corpus",
+            input_tokens=100,
+            output_tokens=20,
+        )
+
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        dropped = [d.path for d in documents[45:]]
+        kept = [d.path for d in documents[:45]]
+        return CondensedResult(
+            body=(
+                "## API surface\n`Client()`\n\n"
+                "## Common workflows\n1. Use client.\n\n"
+                "## Gotchas\nTruncation applied.\n\n"
+                "## Reference\ncore"
+            ),
+            sources=kept,
+            input_tokens=180_000,
+            output_tokens=1_500,
+            dropped_documents=dropped,
+            truncated=True,
+        )
+
+    monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
+    monkeypatch.setattr(GeminiProvider, "count_tokens", fake_count_tokens)
+    monkeypatch.setattr(GeminiProvider, "synthesize_frontmatter", fake_synthesize)
+    monkeypatch.setattr("doc2skill.distill.condense.condense", fake_condense)
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/build",
+            json={
+                "source": "https://docs.example.com/",
+                "source_type": "url",
+                "max_pages": 100,
+                "max_tokens": 1_000_000,
+                "max_context_tokens": 500_000,
+                "no_cache": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    parsed = _parse_sse(resp.text)
+    names = [name for name, _ in parsed]
+    assert "truncate_warning" in names
+    assert "condensed" in names
+    assert names.index("ingest_done") < names.index("truncate_warning") < names.index("budget_pre")
+
+    events_map = dict(parsed)
+    assert events_map["truncate_warning"]["reason"] == "context_limit"
+    assert events_map["truncate_warning"]["dropped_count"] > 0
+    assert events_map["complete"]["truncated"] is True
+    assert len(events_map["complete"]["dropped_documents"]) > 0
+
+
+@pytest.mark.asyncio
+async def test_build_sse_condensed(
+    monkeypatch: pytest.MonkeyPatch, fake_docs: list[Document]
+):
+    """Mock condense and assert condensed SSE event includes token counts and sections."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
+    monkeypatch.setenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
+
+    async def fake_load_url(url: str, max_pages: int = 100):
+        return fake_docs
+
+    def fake_count_tokens(self, prompt: str) -> int:
+        return 100
+
+    def fake_synthesize(self, documents, max_tokens: int = 1000) -> FrontmatterResult:
+        return FrontmatterResult(
+            description="Condensed SSE event skill.",
+            when_to_use="- When checking condensed SSE event",
+            input_tokens=80,
+            output_tokens=20,
+        )
+
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        return CondensedResult(
+            body=(
+                "## API surface\n`Client.get()`\n\n"
+                "## Common workflows\n1. Send GET.\n\n"
+                "## Gotchas\nTimeouts.\n\n"
+                "## Reference\nclient"
+            ),
+            sources=[d.path for d in documents],
+            input_tokens=8400,
+            output_tokens=4200,
+            dropped_documents=[],
+            truncated=False,
+        )
+
+    monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
+    monkeypatch.setattr(GeminiProvider, "count_tokens", fake_count_tokens)
+    monkeypatch.setattr(GeminiProvider, "synthesize_frontmatter", fake_synthesize)
+    monkeypatch.setattr("doc2skill.distill.condense.condense", fake_condense)
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/build",
+            json={
+                "source": "https://fake-docs.example.com/",
+                "source_type": "url",
+                "max_pages": 50,
+                "max_tokens": 50_000,
+                "no_cache": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    parsed = _parse_sse(resp.text)
+    names = [name for name, _ in parsed]
+    assert names.index("llm_done") < names.index("condensed") < names.index("complete")
+
+    condensed_payload = dict(parsed)["condensed"]
+    assert condensed_payload["input_tokens"] == 8400
+    assert condensed_payload["output_tokens"] == 4200
+    assert condensed_payload["sections"] == [
+        "API surface",
+        "Common workflows",
+        "Gotchas",
+        "Reference",
+    ]
+
 
 
 

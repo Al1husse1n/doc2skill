@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import Request
 
 from doc2skill.cache import disk as cache
+from doc2skill.distill.condense import fit_documents_to_context
 from doc2skill.emit.skill import derive_skill_name
 from doc2skill.llm.gemini import DEFAULT_MODEL
 from doc2skill.pipeline.graph import build_pipeline_graph
@@ -22,6 +23,15 @@ def sse_event(event: str, data: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def _extract_sections(markdown_body: str) -> list[str]:
+    """Extract level-2 (## ...) markdown section headers in appearance order."""
+    return [
+        line[3:].strip()
+        for line in markdown_body.splitlines()
+        if line.startswith("## ") and line[3:].strip()
+    ]
+
+
 def _map_node_update(
     node_name: str,
     payload: dict[str, Any],
@@ -29,8 +39,11 @@ def _map_node_update(
     source: str,
     source_type: str,
     max_tokens: int,
+    max_context_tokens: int,
     model_name: str,
     no_llm: bool,
+    no_condense: bool,
+    run_meta: dict[str, Any],
 ) -> tuple[list[dict[str, str]], str | None, bool]:
     """Map a single LangGraph node update to SSE event(s), next stage, and terminal flag.
 
@@ -60,20 +73,43 @@ def _map_node_update(
                 True,
             )
         count = len(docs)
-        return (
-            [
-                sse_event(
-                    "ingest_done",
-                    {
-                        "documents": count,
-                        "source_type": source_type,
-                        "pages_total": count,
-                    },
+        events = [
+            sse_event(
+                "ingest_done",
+                {
+                    "documents": count,
+                    "source_type": source_type,
+                    "pages_total": count,
+                },
+            )
+        ]
+
+        if not no_llm and not no_condense:
+            try:
+                _, pre_dropped, _ = fit_documents_to_context(
+                    docs, model_name, max_context_tokens, client=None
                 )
-            ],
-            "budget",
-            False,
-        )
+            except ValueError as exc:
+                events.append(
+                    sse_event("error", {"stage": "ingest", "message": str(exc)})
+                )
+                return events, None, True
+
+            if pre_dropped:
+                run_meta["truncate_warning_emitted"] = True
+                run_meta["truncated"] = True
+                run_meta["dropped_documents"] = list(pre_dropped)
+                events.append(
+                    sse_event(
+                        "truncate_warning",
+                        {
+                            "dropped_count": len(pre_dropped),
+                            "reason": "context_limit",
+                        },
+                    )
+                )
+
+        return events, "budget", False
 
     if node_name == "budget_guard":
         est = int(payload.get("estimated_tokens", 0))
@@ -113,35 +149,70 @@ def _map_node_update(
                 None,
                 True,
             )
-        return (
-            [
+
+        events: list[dict[str, str]] = []
+        is_truncated = bool(payload.get("truncated", False))
+        dropped = list(payload.get("dropped_documents") or [])
+        if is_truncated:
+            run_meta["truncated"] = True
+            if dropped:
+                run_meta["dropped_documents"] = dropped
+            if not run_meta.get("truncate_warning_emitted"):
+                run_meta["truncate_warning_emitted"] = True
+                events.append(
+                    sse_event(
+                        "truncate_warning",
+                        {
+                            "dropped_count": len(dropped),
+                            "reason": "context_limit",
+                        },
+                    )
+                )
+
+        events.append(
+            sse_event(
+                "llm_done",
+                {
+                    "input_tokens": int(payload.get("llm_input_tokens", 0)),
+                    "output_tokens": int(payload.get("llm_output_tokens", 0)),
+                    "actual_tokens": int(payload.get("actual_tokens", 0)),
+                },
+            )
+        )
+
+        if not no_condense:
+            cond_in = int(payload.get("condense_input_tokens", 0))
+            cond_out = int(payload.get("condense_output_tokens", 0))
+            body = str(payload.get("distilled") or "")
+            events.append(
                 sse_event(
-                    "llm_done",
+                    "condensed",
                     {
-                        "input_tokens": int(payload.get("llm_input_tokens", 0)),
-                        "output_tokens": int(payload.get("llm_output_tokens", 0)),
-                        "actual_tokens": int(payload.get("actual_tokens", 0)),
+                        "input_tokens": cond_in,
+                        "output_tokens": cond_out,
+                        "sections": _extract_sections(body),
                     },
                 )
-            ],
-            "render",
-            False,
-        )
+            )
+
+        return events, "render", False
 
     if node_name == "emit_skill":
         skill_md = payload.get("skill_md") or ""
         skill_name = derive_skill_name(source)
+        is_truncated = bool(run_meta.get("truncated", False))
+        complete_data: dict[str, Any] = {
+            "skill_name": skill_name,
+            "skill_md": skill_md,
+            "cache_hit": False,
+            "truncated": is_truncated,
+        }
+        if is_truncated:
+            complete_data["dropped_documents"] = list(
+                run_meta.get("dropped_documents") or []
+            )
         return (
-            [
-                sse_event(
-                    "complete",
-                    {
-                        "skill_name": skill_name,
-                        "skill_md": skill_md,
-                        "cache_hit": False,
-                    },
-                )
-            ],
+            [sse_event("complete", complete_data)],
             None,
             True,
         )
@@ -154,8 +225,11 @@ async def pipeline_event_stream(
     source_type: str = "url",
     max_pages: int = 100,
     max_tokens: int = 50_000,
+    max_output_tokens: int = 15_000,
+    max_context_tokens: int = 500_000,
     no_cache: bool = False,
     no_llm: bool = False,
+    no_condense: bool = False,
     request: Request | None = None,
 ) -> AsyncIterator[dict[str, str]]:
     """Stream LangGraph pipeline execution updates as SSE events."""
@@ -169,7 +243,8 @@ async def pipeline_event_stream(
         source_type=source_type,
     )
 
-    cached_skill = None if no_cache else cache.get(key)
+    bypass_cache = no_cache or no_condense
+    cached_skill = None if bypass_cache else cache.get(key)
     if cached_skill is not None:
         yield sse_event(
             "complete",
@@ -177,6 +252,7 @@ async def pipeline_event_stream(
                 "skill_name": derive_skill_name(source),
                 "skill_md": cached_skill,
                 "cache_hit": True,
+                "truncated": False,
             },
         )
         return
@@ -185,6 +261,11 @@ async def pipeline_event_stream(
 
     current_stage = "ingest"
     completed = False
+    run_meta: dict[str, Any] = {
+        "truncated": False,
+        "dropped_documents": [],
+        "truncate_warning_emitted": False,
+    }
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         graph = build_pipeline_graph()
@@ -195,6 +276,9 @@ async def pipeline_event_stream(
             no_llm=no_llm,
             model=selected_model,
             max_pages=max_pages,
+            max_output_tokens=max_output_tokens,
+            max_context_tokens=max_context_tokens,
+            no_condense=no_condense,
         )
         model_name = str(state.get("model", selected_model))
 
@@ -213,10 +297,13 @@ async def pipeline_event_stream(
                     source=source,
                     source_type=source_type,
                     max_tokens=max_tokens,
+                    max_context_tokens=max_context_tokens,
                     model_name=model_name,
                     no_llm=no_llm,
+                    no_condense=no_condense,
+                    run_meta=run_meta,
                 )
-                if node_name == "emit_skill" and not no_cache:
+                if node_name == "emit_skill" and not bypass_cache:
                     skill_md = payload.get("skill_md") or ""
                     if skill_md:
                         cache.set(key, skill_md)
@@ -246,4 +333,3 @@ async def pipeline_event_stream(
                 "message": "Pipeline completed without generating SKILL.md",
             },
         )
-

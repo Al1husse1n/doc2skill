@@ -224,6 +224,23 @@ button:disabled {
   font-size: 0.9rem;
 }
 
+.warning-badge {
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 6px;
+  border: 1px solid #d29922;
+  background: rgba(210, 153, 34, 0.12);
+  color: #9a6700;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .warning-badge {
+    color: #e3b341;
+  }
+}
+
 .actions {
   display: flex;
   gap: 0.65rem;

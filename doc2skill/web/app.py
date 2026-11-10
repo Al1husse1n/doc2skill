@@ -27,8 +27,11 @@ class BuildRequest(BaseModel):
     source_type: Literal["url", "markdown_dir"] = "url"
     max_pages: int = Field(default=50, ge=1)
     max_tokens: int = Field(default=50_000, ge=1)
+    max_output_tokens: int = Field(default=15_000, ge=1)
+    max_context_tokens: int = Field(default=500_000, ge=1)
     no_cache: bool = False
     no_llm: bool = False
+    no_condense: bool = False
 
 
 def get_llm_config() -> dict[str, str | bool]:
@@ -110,8 +113,11 @@ def create_app() -> FastAPI:
                 source_type=payload.source_type,
                 max_pages=payload.max_pages,
                 max_tokens=payload.max_tokens,
+                max_output_tokens=payload.max_output_tokens,
+                max_context_tokens=payload.max_context_tokens,
                 no_cache=payload.no_cache,
                 no_llm=payload.no_llm,
+                no_condense=payload.no_condense,
                 request=request,
             ),
             sep="\n",

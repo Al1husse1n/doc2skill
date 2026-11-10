@@ -54,6 +54,7 @@
         <li id="step-render"><span class="step-icon">○</span><span>Rendering</span></li>
       </ul>
       <div id="metrics" class="metrics hidden"></div>
+      <div id="warning-badge" class="warning-badge hidden"></div>
       <div id="error-banner" class="error-banner hidden"></div>
     </section>
 
@@ -74,6 +75,7 @@
     const buildBtn = document.getElementById("build-btn");
     const progressArea = document.getElementById("progress-area");
     const metricsEl = document.getElementById("metrics");
+    const warningBadge = document.getElementById("warning-badge");
     const errorBanner = document.getElementById("error-banner");
     const resultArea = document.getElementById("result-area");
     const skillPreview = document.getElementById("skill-preview");
@@ -123,11 +125,18 @@
       }
     }
 
+    function showWarning(message) {
+      warningBadge.textContent = message;
+      warningBadge.classList.remove("hidden");
+    }
+
     function resetUI() {
       progressArea.classList.remove("hidden");
       resultArea.classList.add("hidden");
       metricsEl.innerHTML = "";
       metricsEl.classList.add("hidden");
+      warningBadge.textContent = "";
+      warningBadge.classList.add("hidden");
       errorBanner.textContent = "";
       errorBanner.classList.add("hidden");
       currentSkillMd = "";
@@ -154,6 +163,9 @@
         setStepState("ingest", "done");
         setStepState("budget", "active");
         addMetric(`${data.documents} document(s) loaded`);
+      } else if (eventName === "truncate_warning") {
+        const count = Number(data.dropped_count || 0);
+        showWarning(`${count} docs dropped to fit context limit.`);
       } else if (eventName === "budget_pre") {
         setStepState("budget", "done");
         const est = Number(data.estimated_input_tokens || 0).toLocaleString();
@@ -164,13 +176,18 @@
         }
       } else if (eventName === "llm_call") {
         setStepState("llm", "active");
-        addMetric(`Synthesizing frontmatter (${data.model || "gemini"})...`);
+        addMetric(`Synthesizing & condensing (${data.model || "gemini"})...`);
       } else if (eventName === "llm_done") {
         setStepState("llm", "done");
         setStepState("render", "active");
         const inTok = Number(data.input_tokens || 0).toLocaleString();
         const outTok = Number(data.output_tokens || 0).toLocaleString();
         addMetric(`${inTok} input tokens, ${outTok} output tokens`);
+      } else if (eventName === "condensed") {
+        const cIn = Number(data.input_tokens || 0).toLocaleString();
+        const cOut = Number(data.output_tokens || 0).toLocaleString();
+        const secs = Array.isArray(data.sections) ? data.sections.join(", ") : "";
+        addMetric(`Condensed corpus (${cIn} in → ${cOut} out): ${secs}`);
       } else if (eventName === "complete") {
         if (data.cache_hit) {
           setStepState("ingest", "skipped");
@@ -179,6 +196,9 @@
           addMetric("Cache hit: loaded from disk cache");
         } else if (!steps.llm.classList.contains("done")) {
           setStepState("llm", "skipped");
+        }
+        if (data.truncated && Array.isArray(data.dropped_documents) && data.dropped_documents.length > 0) {
+          showWarning(`${data.dropped_documents.length} docs dropped to fit context limit.`);
         }
         setStepState("render", "done");
         currentSkillMd = data.skill_md || "";
