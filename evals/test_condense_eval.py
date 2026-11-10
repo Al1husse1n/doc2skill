@@ -38,11 +38,10 @@ def test_httpx_docs_condensation_eval(tmp_path: Path):
     assert skill_md is not None
 
     skill_tokens = estimate_tokens(skill_md)
-    cond_in = result.get("condense_input_tokens", 0)
-    cond_out = result.get("condense_output_tokens", 0)
     llm_in = result.get("llm_input_tokens", 0)
     llm_out = result.get("llm_output_tokens", 0)
     actual_tokens = result.get("actual_tokens", 0)
+    truncated = bool(result.get("truncated", False))
 
     # 2. Uncondensed baseline run (--no-condense)
     baseline_out = tmp_path / "baseline_out"
@@ -63,17 +62,23 @@ def test_httpx_docs_condensation_eval(tmp_path: Path):
 
     print(
         f"\n[EVAL METRICS]"
-        f"\n  Condensed SKILL.md tokens (est): {skill_tokens}"
-        f"\n  Condense LLM tokens: in={cond_in}, out={cond_out}"
-        f"\n  Total LLM tokens (frontmatter + condense): in={llm_in}, out={llm_out}, actual_tokens={actual_tokens}"
-        f"\n  Uncondensed baseline SKILL.md tokens (est): {baseline_skill_tokens}"
-        f"\n  Condensed output path: {result.get('output_path')}"
-        f"\n  Baseline output path: {baseline_result.get('output_path')}"
+        f"\nCondensed SKILL.md tokens: {skill_tokens}"
+        f"\nLLM output tokens: {llm_out}"
+        f"\nLLM input tokens: {llm_in}"
+        f"\nTotal actual tokens: {actual_tokens}"
+        f"\nTruncated: {truncated}"
     )
 
-    # Assertion 1: Condensed skill fits <= 15,000 token skill budget
-    assert skill_tokens < 15_000, f"Condensed SKILL.md too large: {skill_tokens} tokens"
+    # Assertion 1: Condensed skill fits <= 15,000 token budget, corpus fits context without truncation
     assert llm_out < 15_000, f"LLM output tokens exceeded 15k: {llm_out}"
+    assert skill_tokens < 15_000, f"Condensed SKILL.md too large: {skill_tokens} tokens"
+    assert result["actual_tokens"] < result["max_context_tokens"], (
+        f"Total actual tokens {actual_tokens} exceeded max_context_tokens "
+        f"{result['max_context_tokens']}"
+    )
+    assert not result["truncated"], (
+        f"Corpus should fit without truncation, dropped={result.get('dropped_documents')}"
+    )
 
     # Assertion 2: API surface preserved (all required identifiers)
     for ident in ("httpx.Client", "httpx.AsyncClient", "httpx.get", "httpx.post", "httpx.Timeout"):
@@ -90,11 +95,28 @@ def test_httpx_docs_condensation_eval(tmp_path: Path):
         gotcha in lower_md for gotcha in ("timeout", "follow_redirects", "raise_for_status")
     ), "Missing critical gotcha (timeout / follow_redirects / raise_for_status)"
 
-    # Assertion 5: Boilerplate dropped
-    assert "pip install httpx" not in lower_md, "Installation instruction leaked into SKILL.md"
-    assert not re.search(r"^##\s+Contributing\b", skill_md, re.MULTILINE | re.IGNORECASE), (
-        "Contributing header leaked into SKILL.md"
-    )
+    # Assertion 5: Boilerplate content from installation.md and contributing.md dropped
+    installation_markers = [
+        "HTTPX requires Python 3.8 or later",
+        "python -m pip install httpx",
+        "$ pip install httpx\n",
+        "pip install httpx[cli]",  # legacy extra
+    ]
+    for marker in installation_markers:
+        assert marker not in skill_md, f"Installation boilerplate leaked: {marker!r}"
+
+    contributing_markers = [
+        "## Contributing",
+        "## Development",
+        "git clone https://github.com/encode/httpx",
+        "make install",
+        "make test",
+        "scripts/install",
+        "scripts/test",
+    ]
+    for marker in contributing_markers:
+        assert marker not in skill_md, f"Contributing boilerplate leaked: {marker!r}"
+
     assert not re.search(r"\bChangelog\b", skill_md, re.IGNORECASE), (
         "Changelog leaked into SKILL.md"
     )

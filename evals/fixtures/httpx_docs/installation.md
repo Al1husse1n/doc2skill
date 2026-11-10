@@ -4,6 +4,7 @@ HTTPX requires Python 3.8 or later. You can install HTTPX using `pip`:
 
 ```shell
 $ pip install httpx
+$ python -m pip install httpx
 ```
 
 ## Optional Dependencies
@@ -33,3 +34,4 @@ $ python -m venv .venv
 $ source .venv/bin/activate
 $ python -c "import httpx; print(httpx.__version__)"
 ```
+
