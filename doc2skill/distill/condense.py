@@ -16,6 +16,28 @@ logger = logging.getLogger(__name__)
 
 MIN_DOCS_BEFORE_REFUSAL = 5
 
+REFUSAL_MARKERS = [
+    "I cannot",
+    "I can't",
+    "I'm unable",
+    "I'm not able",
+    "I'm sorry",
+    "I apologize",
+    "As an AI",
+]
+
+
+def _looks_like_refusal(text: str) -> bool:
+    """Detect common LLM refusal phrases near the start of output."""
+    head = text[:500].lower()
+    return any(marker.lower() in head for marker in REFUSAL_MARKERS)
+
+
+def _looks_like_stub(text: str) -> bool:
+    """Detect empty, punctuation-only, or stub (<100 char) condensation output."""
+    stripped = text.strip()
+    return stripped in ("", ".", "...", "-", "n/a") or len(stripped) < 100
+
 CONDENSE_SYSTEM_PROMPT = """You are writing an agent skill. An agent skill is a compact reference that another AI agent loads to accomplish real tasks. It is NOT documentation. It is NOT marketing. It is a working manual.
 
 Required output sections (use exact level-2 markdown headings):
@@ -234,7 +256,8 @@ async def condense(
         max_output_tokens,
     )
 
-    body = _strip_outer_code_fences(response.text or "")
+    raw_text = response.text or ""
+    body = _strip_outer_code_fences(raw_text)
 
     usage = getattr(response, "usage_metadata", None)
     input_tokens = int(getattr(usage, "prompt_token_count", 0) or 0) if usage else 0
@@ -242,11 +265,16 @@ async def condense(
 
     raw_doc_tokens = sum(len(d.content) for d in kept_docs) // 4
     effective_in_tokens = input_tokens if input_tokens > 0 else raw_doc_tokens
-    effective_out_tokens = output_tokens if output_tokens > 0 else (len(body) // 4)
-    min_required = 500 if effective_in_tokens >= 400 else 50
+    response_tokens = output_tokens if output_tokens > 0 else (len(body) // 4)
 
-    if not body or effective_out_tokens < min_required:
-        raise ValueError("Condensation produced suspiciously short output; refusing.")
+    if _looks_like_refusal(body):
+        raise ValueError(f"Condensation refused: {body[:200]}")
+    if _looks_like_stub(body):
+        raise ValueError("Condensation produced empty/stub output")
+    if response_tokens < 0.1 * effective_in_tokens and effective_in_tokens > 1000:
+        raise ValueError(
+            f"Condensation too short: {response_tokens} output tokens from {effective_in_tokens} input tokens"
+        )
 
     return CondensedResult(
         body=body,

@@ -93,8 +93,8 @@ def test_budget_guard_allows_llm_when_within_budget(
     condense_resp = MagicMock()
     condense_resp.text = (
         "## API surface\n`Endpoint()`\n\n"
-        "## Common workflows\n1. Call API.\n\n"
-        "## Gotchas\nNone.\n\n"
+        "## Common workflows\n1. Call API endpoints carefully.\n\n"
+        "## Gotchas\nAlways set timeouts.\n\n"
         "## Reference\napi.md"
     )
     condense_resp.usage_metadata.prompt_token_count = 100

@@ -78,7 +78,10 @@ async def test_condense_rejects_empty_or_suspiciously_short_output():
         mock_resp.usage_metadata.candidates_token_count = tok_count
         mock_client.models.generate_content.return_value = mock_resp
 
-        with pytest.raises(ValueError, match="suspiciously short"):
+        with pytest.raises(
+            ValueError,
+            match=r"Condensation (produced empty/stub output|refused)",
+        ):
             await condense(documents=docs, model="gemini-2.5-flash", client=mock_client)
 
 
@@ -153,9 +156,14 @@ async def test_condense_truncation_100_docs(caplog):
         return resp
 
     ok_resp = MagicMock()
-    ok_resp.text = "## API surface\n`Core()`\n\n## Common workflows\n1. Use core.\n\n## Gotchas\nLimits.\n\n## Reference\ncore"
-    ok_resp.usage_metadata.prompt_token_count = 150_000
-    ok_resp.usage_metadata.candidates_token_count = 1_200
+    ok_resp.text = (
+        "## API surface\n`Core()`\n\n"
+        "## Common workflows\n1. Use core methods.\n\n"
+        "## Gotchas\nContext limits.\n\n"
+        "## Reference\ncore module documentation."
+    )
+    ok_resp.usage_metadata.prompt_token_count = 120_000
+    ok_resp.usage_metadata.candidates_token_count = 12_500
 
     mock_client.models.count_tokens.side_effect = fake_count_tokens
     mock_client.models.generate_content.return_value = ok_resp
@@ -207,4 +215,101 @@ async def test_condense_truncation_refuses_below_5_docs():
         )
 
     mock_client.models.generate_content.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_condense_rejects_refusal_markers():
+    """LLM refusal markers raise ValueError even if output is non-empty."""
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "I'm sorry, I can't help with that."
+    mock_resp.usage_metadata.prompt_token_count = 500
+    mock_resp.usage_metadata.candidates_token_count = 10
+    mock_client.models.generate_content.return_value = mock_resp
+
+    with pytest.raises(ValueError, match="Condensation refused"):
+        await condense(
+            documents=_make_sample_docs(),
+            model="gemini-2.5-flash",
+            client=mock_client,
+        )
+
+
+@pytest.mark.asyncio
+async def test_condense_rejects_stub():
+    """Punctuation-only or <100 char stub output raises ValueError."""
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = "."
+    mock_resp.usage_metadata.prompt_token_count = 500
+    mock_resp.usage_metadata.candidates_token_count = 1
+    mock_client.models.generate_content.return_value = mock_resp
+
+    with pytest.raises(ValueError, match="Condensation produced empty/stub output"):
+        await condense(
+            documents=_make_sample_docs(),
+            model="gemini-2.5-flash",
+            client=mock_client,
+        )
+
+
+@pytest.mark.asyncio
+async def test_condense_allows_short_output_for_tiny_input():
+    """Tiny 2-doc corpus (<1000 input tokens) succeeds with a valid 150-token skill body."""
+    docs = [
+        Document(
+            path="https://example.com/",
+            content="# Example Domain\nThis domain is for use in illustrative examples in documents.",
+            title="Example Domain",
+        ),
+        Document(
+            path="https://example.com/about",
+            content="# About Example\nReference page describing illustrative example usage.",
+            title="About",
+        ),
+    ]
+    short_skill_body = (
+        "## API surface\n`GET https://example.com/` — Illustrative HTTP endpoint.\n\n"
+        "## Common workflows\n1. Fetch `https://example.com/` for connectivity checks.\n\n"
+        "## Gotchas\nNot for production traffic.\n\n"
+        "## Reference\nhttps://example.com/"
+    )
+    assert len(short_skill_body) >= 100
+
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = short_skill_body
+    mock_resp.usage_metadata.prompt_token_count = 500
+    mock_resp.usage_metadata.candidates_token_count = 150
+    mock_client.models.generate_content.return_value = mock_resp
+
+    result = await condense(
+        documents=docs,
+        model="gemini-2.5-flash",
+        client=mock_client,
+    )
+
+    assert result.body == short_skill_body
+    assert result.output_tokens == 150
+
+
+@pytest.mark.asyncio
+async def test_condense_rejects_disproportionately_short_output_for_large_input():
+    """For input > 1000 tokens, output below 10% of input raises ValueError."""
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = (
+        "## API surface\n`Client()`\n\n## Common workflows\n1. Run it.\n\n"
+        "## Gotchas\nWatch limits.\n\n## Reference\nSee client docs."
+    )
+    mock_resp.usage_metadata.prompt_token_count = 5_000
+    mock_resp.usage_metadata.candidates_token_count = 200
+    mock_client.models.generate_content.return_value = mock_resp
+
+    with pytest.raises(ValueError, match="Condensation too short"):
+        await condense(
+            documents=_make_sample_docs(),
+            model="gemini-2.5-flash",
+            client=mock_client,
+        )
 
