@@ -271,3 +271,56 @@ async def test_build_no_llm_flag(
 
     skill_md = dict(parsed)["complete"]["skill_md"]
     assert "(placeholder — will be LLM-generated later)" in skill_md
+
+
+def test_app_factory_routes():
+    """Smoke test importing app factory from doc2skill.web and inspecting routes."""
+    from doc2skill.web import create_app as exported_create_app
+
+    app = exported_create_app()
+    route_paths = {getattr(r, "path", None) for r in app.routes}
+    assert "/" in route_paths
+    assert "/api/health" in route_paths
+    assert "/api/build" in route_paths
+
+
+def test_serve_command_smoke(monkeypatch: pytest.MonkeyPatch):
+    """Smoke test `doc2skill serve` CLI options, banner, warning, and 0.0.0.0 prompt."""
+    from typer.testing import CliRunner
+
+    from doc2skill.cli import app as cli_app
+
+    runner = CliRunner()
+    calls: list[dict] = []
+
+    def fake_uvicorn_run(target, **kwargs):
+        calls.append({"target": target, **kwargs})
+
+    monkeypatch.setattr("uvicorn.run", fake_uvicorn_run)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+
+    # 1. Default invocation: 127.0.0.1:8000, missing GEMINI_API_KEY warns but still runs
+    res_default = runner.invoke(cli_app, ["serve"])
+    assert res_default.exit_code == 0
+    assert "Warning: GEMINI_API_KEY is not set" in res_default.output
+    assert "doc2skill server starting" in res_default.output
+    assert "http://127.0.0.1:8000" in res_default.output
+    assert calls[-1]["host"] == "127.0.0.1"
+    assert calls[-1]["port"] == 8000
+
+    # 2. --host 0.0.0.0 without --yes prompts and aborts on 'n'
+    res_abort = runner.invoke(cli_app, ["serve", "--host", "0.0.0.0"], input="n\n")
+    assert res_abort.exit_code != 0
+    assert "expose the app to your network" in res_abort.output
+
+    # 3. --host 0.0.0.0 --yes --reload runs factory with reload=True
+    res_reload = runner.invoke(
+        cli_app, ["serve", "--host", "0.0.0.0", "--port", "8765", "--reload", "--yes"]
+    )
+    assert res_reload.exit_code == 0
+    assert calls[-1]["target"] == "doc2skill.web.app:create_app"
+    assert calls[-1]["factory"] is True
+    assert calls[-1]["reload"] is True
+    assert calls[-1]["host"] == "0.0.0.0"
+    assert calls[-1]["port"] == 8765
+

@@ -233,6 +233,80 @@ def main(
     typer.echo(f"  Output: {output_path}")
 
 
+@app.command(name="serve")
+def serve(
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host",
+            help="Host address to bind (default 127.0.0.1 for local-only).",
+        ),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option(
+            "--port",
+            "-p",
+            help="Port to listen on.",
+        ),
+    ] = 8000,
+    reload: Annotated[
+        bool,
+        typer.Option(
+            "--reload",
+            help="Enable auto-reload for development.",
+        ),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Skip confirmation prompt when binding to 0.0.0.0.",
+        ),
+    ] = False,
+) -> None:
+    """Launch the local doc2skill web application."""
+    if host == "0.0.0.0" and not yes:
+        confirmed = typer.confirm(
+            "This will expose the app to your network. Continue?",
+            default=False,
+        )
+        if not confirmed:
+            typer.echo("Aborted.")
+            raise typer.Exit(code=1)
+
+    if not os.environ.get("GEMINI_API_KEY"):
+        typer.secho(
+            "Warning: GEMINI_API_KEY is not set. LLM synthesis will be unavailable unless configured (use Skip LLM in UI).",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+
+    typer.echo("doc2skill server starting")
+    typer.echo(f"→ http://{host}:{port}")
+    typer.echo("Press Ctrl+C to stop")
+
+    import uvicorn
+
+    if reload:
+        uvicorn.run(
+            "doc2skill.web.app:create_app",
+            factory=True,
+            host=host,
+            port=port,
+            reload=True,
+        )
+    else:
+        from doc2skill.web.app import create_app
+
+        uvicorn.run(
+            create_app(),
+            host=host,
+            port=port,
+        )
+
+
 @app.command(name="version", hidden=True)
 def version() -> None:
     """Print package version."""
