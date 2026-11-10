@@ -313,3 +313,26 @@ async def test_condense_rejects_disproportionately_short_output_for_large_input(
             client=mock_client,
         )
 
+
+@pytest.mark.asyncio
+async def test_condense_allows_short_output_for_large_input():
+    """Large corpus (200k input tokens) with 3000 output tokens succeeds via capped 2000-token floor."""
+    mock_client = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.text = (
+        "## API surface\n`Client()`\n\n## Common workflows\n1. Run workflow.\n\n"
+        "## Gotchas\nRespect context and timeout limits.\n\n## Reference\nSee full client reference."
+    )
+    mock_resp.usage_metadata.prompt_token_count = 200_000
+    mock_resp.usage_metadata.candidates_token_count = 3_000
+    mock_client.models.generate_content.return_value = mock_resp
+
+    result = await condense(
+        documents=_make_sample_docs(),
+        model="gemini-2.5-flash",
+        client=mock_client,
+    )
+
+    assert result.input_tokens == 200_000
+    assert result.output_tokens == 3_000
+

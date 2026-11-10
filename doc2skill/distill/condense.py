@@ -271,7 +271,8 @@ async def condense(
         raise ValueError(f"Condensation refused: {body[:200]}")
     if _looks_like_stub(body):
         raise ValueError("Condensation produced empty/stub output")
-    if response_tokens < 0.1 * effective_in_tokens and effective_in_tokens > 1000:
+    floor = min(int(0.1 * effective_in_tokens), 2000)
+    if effective_in_tokens > 1000 and response_tokens < floor:
         raise ValueError(
             f"Condensation too short: {response_tokens} output tokens from {effective_in_tokens} input tokens"
         )
