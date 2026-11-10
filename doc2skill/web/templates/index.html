@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>doc2skill</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>doc2skill</h1>
+      <p class="tagline">Documentation → agent skill</p>
+    </header>
+
+    <section class="card">
+      <form id="build-form">
+        <div class="field">
+          <label for="source-url">Documentation URL</label>
+          <input
+            id="source-url"
+            name="source"
+            type="url"
+            placeholder="https://docs.example.com/"
+            required
+          >
+        </div>
+
+        <div class="field-row">
+          <div class="field">
+            <label for="max-pages">Max pages</label>
+            <input id="max-pages" name="max_pages" type="number" min="1" value="50">
+          </div>
+          <div class="field">
+            <label for="max-tokens">Max tokens</label>
+            <input id="max-tokens" name="max_tokens" type="number" min="1" value="50000">
+          </div>
+        </div>
+
+        <label class="checkbox-field">
+          <input id="no-llm" name="no_llm" type="checkbox">
+          <span>Skip LLM (offline mode)</span>
+        </label>
+
+        <button id="build-btn" type="submit" class="primary">Build skill</button>
+      </form>
+    </section>
+
+    <section id="progress-area" class="card hidden" aria-live="polite">
+      <ul class="timeline">
+        <li id="step-ingest"><span class="step-icon">○</span><span>Ingesting</span></li>
+        <li id="step-budget"><span class="step-icon">○</span><span>Budget check</span></li>
+        <li id="step-llm"><span class="step-icon">○</span><span>LLM synthesis</span></li>
+        <li id="step-render"><span class="step-icon">○</span><span>Rendering</span></li>
+      </ul>
+      <div id="metrics" class="metrics hidden"></div>
+      <div id="error-banner" class="error-banner hidden"></div>
+    </section>
+
+    <section id="result-area" class="card hidden">
+      <div class="actions">
+        <button id="download-btn" type="button" class="primary">Download SKILL.md</button>
+        <button id="copy-btn" type="button">Copy to clipboard</button>
+      </div>
+      <details open>
+        <summary>Generated SKILL.md</summary>
+        <pre id="skill-preview"></pre>
+      </details>
+    </section>
+  </div>
+
+  <script>
+    const form = document.getElementById("build-form");
+    const buildBtn = document.getElementById("build-btn");
+    const progressArea = document.getElementById("progress-area");
+    const metricsEl = document.getElementById("metrics");
+    const errorBanner = document.getElementById("error-banner");
+    const resultArea = document.getElementById("result-area");
+    const skillPreview = document.getElementById("skill-preview");
+    const downloadBtn = document.getElementById("download-btn");
+    const copyBtn = document.getElementById("copy-btn");
+
+    const steps = {
+      ingest: document.getElementById("step-ingest"),
+      budget: document.getElementById("step-budget"),
+      llm: document.getElementById("step-llm"),
+      render: document.getElementById("step-render"),
+    };
+
+    let currentSkillMd = "";
+    let currentSkillName = "SKILL";
+
+    function setStepState(key, state) {
+      const el = steps[key];
+      if (!el) return;
+      el.className = state;
+      const icon = el.querySelector(".step-icon");
+      if (state === "active") {
+        icon.innerHTML = '<span class="spinner"></span>';
+      } else if (state === "done") {
+        icon.textContent = "✓";
+      } else if (state === "error") {
+        icon.textContent = "✕";
+      } else if (state === "skipped") {
+        icon.textContent = "–";
+      } else {
+        icon.textContent = "○";
+      }
+    }
+
+    function addMetric(text) {
+      metricsEl.classList.remove("hidden");
+      const p = document.createElement("p");
+      p.textContent = text;
+      metricsEl.appendChild(p);
+    }
+
+    function showError(message, stage) {
+      errorBanner.textContent = message;
+      errorBanner.classList.remove("hidden");
+      if (stage && steps[stage]) {
+        setStepState(stage, "error");
+      }
+    }
+
+    function resetUI() {
+      progressArea.classList.remove("hidden");
+      resultArea.classList.add("hidden");
+      metricsEl.innerHTML = "";
+      metricsEl.classList.add("hidden");
+      errorBanner.textContent = "";
+      errorBanner.classList.add("hidden");
+      currentSkillMd = "";
+      Object.keys(steps).forEach((k) => setStepState(k, ""));
+    }
+
+    function handleSseEvent(eventName, rawData) {
+      let data = {};
+      try {
+        data = JSON.parse(rawData);
+      } catch {
+        data = { raw: rawData };
+      }
+
+      if (eventName === "start") {
+        setStepState("ingest", "active");
+      } else if (eventName === "ingest_progress") {
+        if (data.status === "loading") {
+          addMetric("Loading pages...");
+        } else if (data.pages_total) {
+          addMetric(`Fetched ${data.pages_fetched || 0} / ${data.pages_total} pages`);
+        }
+      } else if (eventName === "ingest_done") {
+        setStepState("ingest", "done");
+        setStepState("budget", "active");
+        addMetric(`${data.documents} document(s) loaded`);
+      } else if (eventName === "budget_pre") {
+        setStepState("budget", "done");
+        const est = Number(data.estimated_input_tokens || 0).toLocaleString();
+        addMetric(`${est} estimated input tokens (limit: ${Number(data.max_tokens || 0).toLocaleString()})`);
+        if (document.getElementById("no-llm").checked) {
+          setStepState("llm", "skipped");
+          setStepState("render", "active");
+        }
+      } else if (eventName === "llm_call") {
+        setStepState("llm", "active");
+        addMetric(`Synthesizing frontmatter (${data.model || "gemini"})...`);
+      } else if (eventName === "llm_done") {
+        setStepState("llm", "done");
+        setStepState("render", "active");
+        const inTok = Number(data.input_tokens || 0).toLocaleString();
+        const outTok = Number(data.output_tokens || 0).toLocaleString();
+        addMetric(`${inTok} input tokens, ${outTok} output tokens`);
+      } else if (eventName === "complete") {
+        if (!steps.llm.classList.contains("done")) {
+          setStepState("llm", "skipped");
+        }
+        setStepState("render", "done");
+        currentSkillMd = data.skill_md || "";
+        currentSkillName = data.skill_name || "skill";
+        skillPreview.textContent = currentSkillMd;
+        resultArea.classList.remove("hidden");
+      } else if (eventName === "error") {
+        const stage = data.stage === "pipeline" ? "render" : data.stage;
+        showError(data.message || "Build failed", stage);
+      }
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      resetUI();
+      buildBtn.disabled = true;
+
+      const payload = {
+        source: document.getElementById("source-url").value.trim(),
+        source_type: "url",
+        max_pages: parseInt(document.getElementById("max-pages").value, 10) || 50,
+        max_tokens: parseInt(document.getElementById("max-tokens").value, 10) || 50000,
+        no_cache: false,
+        no_llm: document.getElementById("no-llm").checked,
+      };
+
+      try {
+        const resp = await fetch("/api/build", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (!resp.ok) {
+          let msg = `Request failed (${resp.status})`;
+          try {
+            const errJson = await resp.json();
+            msg = errJson.detail || JSON.stringify(errJson);
+          } catch {}
+          showError(msg, "ingest");
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+
+          const blocks = buffer.split("\n\n");
+          buffer = blocks.pop() || "";
+
+          for (const block of blocks) {
+            if (!block.trim()) continue;
+            let eventName = "message";
+            const dataLines = [];
+            for (const line of block.split("\n")) {
+              if (line.startsWith("event:")) {
+                eventName = line.slice(6).trim();
+              } else if (line.startsWith("data:")) {
+                dataLines.push(line.slice(5).trim());
+              }
+            }
+            if (dataLines.length > 0) {
+              handleSseEvent(eventName, dataLines.join("\n"));
+            }
+          }
+        }
+      } catch (err) {
+        showError(err.message || "Network error", "ingest");
+      } finally {
+        buildBtn.disabled = false;
+      }
+    });
+
+    downloadBtn.addEventListener("click", () => {
+      const blob = new Blob([currentSkillMd], { type: "text/markdown;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "SKILL.md";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    });
+
+    copyBtn.addEventListener("click", async () => {
+      if (!currentSkillMd) return;
+      try {
+        await navigator.clipboard.writeText(currentSkillMd);
+        const orig = copyBtn.textContent;
+        copyBtn.textContent = "Copied!";
+        setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+      } catch {}
+    });
+  </script>
+</body>
+</html>
