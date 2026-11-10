@@ -4,6 +4,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from doc2skill.distill.condense import CondensedResult
 from doc2skill.ingest.base import Document
 from doc2skill.llm.base import FrontmatterResult
 from doc2skill.llm.gemini import GeminiProvider
@@ -119,9 +120,22 @@ async def test_build_sse_success(
             output_tokens=25,
         )
 
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        return CondensedResult(
+            body="## API surface\n`SDK.init()`\n\n## Common workflows\n1. Run init.\n\n## Gotchas\nNone.\n\n## Reference\nquickstart",
+            sources=[d.path for d in documents],
+            input_tokens=200,
+            output_tokens=100,
+            dropped_documents=[],
+            truncated=False,
+        )
+
     monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
     monkeypatch.setattr(GeminiProvider, "count_tokens", fake_count_tokens)
     monkeypatch.setattr(GeminiProvider, "synthesize_frontmatter", fake_synthesize)
+    monkeypatch.setattr("doc2skill.distill.condense.condense", fake_condense)
 
     app = create_app()
     transport = httpx.ASGITransport(app=app)
@@ -175,9 +189,15 @@ async def test_build_sse_budget_exceeded(
         synth_called = True
         raise AssertionError("synthesize_frontmatter must not be called over budget")
 
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        raise AssertionError("condense must not be called over budget")
+
     monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
     monkeypatch.setattr(GeminiProvider, "count_tokens", fake_count_tokens)
     monkeypatch.setattr(GeminiProvider, "synthesize_frontmatter", fake_synthesize)
+    monkeypatch.setattr("doc2skill.distill.condense.condense", fake_condense)
 
     app = create_app()
     transport = httpx.ASGITransport(app=app)
@@ -391,9 +411,22 @@ async def test_build_cache_hit(
             output_tokens=20,
         )
 
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        return CondensedResult(
+            body=f"## API surface\n`run_{llm_calls}()`\n\n## Common workflows\n1. Call.\n\n## Gotchas\nNone.\n\n## Reference\ndocs",
+            sources=[d.path for d in documents],
+            input_tokens=150,
+            output_tokens=80,
+            dropped_documents=[],
+            truncated=False,
+        )
+
     monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
     monkeypatch.setattr(GeminiProvider, "count_tokens", fake_count_tokens)
     monkeypatch.setattr(GeminiProvider, "synthesize_frontmatter", fake_synthesize)
+    monkeypatch.setattr("doc2skill.distill.condense.condense", fake_condense)
 
     app = create_app()
     transport = httpx.ASGITransport(app=app)

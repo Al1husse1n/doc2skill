@@ -85,14 +85,35 @@ def main(
         bool,
         typer.Option(
             "--no-llm",
-            help="Force fallback frontmatter without making LLM calls.",
+            help="Force fallback frontmatter and raw body without making LLM calls.",
         ),
     ] = False,
+    no_condense: Annotated[
+        bool,
+        typer.Option(
+            "--no-condense",
+            help="Skip single-call corpus condensation and emit concatenated raw documents.",
+        ),
+    ] = False,
+    max_output_tokens: Annotated[
+        int,
+        typer.Option(
+            "--max-output-tokens",
+            help="Maximum output tokens for condensed skill body.",
+        ),
+    ] = 15_000,
+    max_context_tokens: Annotated[
+        int,
+        typer.Option(
+            "--max-context-tokens",
+            help="Maximum input context tokens before dropping deeply-nested documents.",
+        ),
+    ] = 500_000,
     model: Annotated[
         str | None,
         typer.Option(
             "--model",
-            help="Gemini model name for frontmatter synthesis.",
+            help="Gemini model name for frontmatter synthesis and condensation.",
         ),
     ] = None,
 ) -> None:
@@ -114,16 +135,17 @@ def main(
         source_type=source_type,
     )
 
-    # Check cache unless --no-cache is specified
-    cached_content = None if no_cache else cache.get(key)
-    if cached_content is not None and not no_cache:
+    # Check cache unless --no-cache or --no-condense is specified
+    bypass_cache = no_cache or no_condense
+    cached_content = None if bypass_cache else cache.get(key)
+    if cached_content is not None and not bypass_cache:
         typer.echo("Cache hit: writing from cache")
         out_file = write_skill_file(cached_content, skill_name, output_dir=output)
         est_tokens = estimate_tokens(cached_content)
 
         typer.echo("Summary:")
         typer.echo(f"  Source: {source_path}")
-        typer.echo("  Documents loaded: cached")
+        typer.echo("  Documents used: cached")
         typer.echo(f"  Estimated input tokens: {est_tokens}")
         typer.echo(f"  Output: {out_file}")
         return
@@ -165,6 +187,9 @@ def main(
         model=selected_model,
         documents=loaded_documents,
         max_pages=max_pages,
+        max_output_tokens=max_output_tokens,
+        max_context_tokens=max_context_tokens,
+        no_condense=no_condense,
     )
 
     result = graph.invoke(initial_state)
@@ -202,14 +227,20 @@ def main(
         write_skill_file(skill_md, skill_name, output_dir=output)
     )
 
-    # Store result in cache
-    cache.set(key, skill_md)
+    # Store result in cache (unless --no-cache or --no-condense)
+    if not no_cache and not no_condense:
+        cache.set(key, skill_md)
 
     docs_loaded = len(result.get("documents", []))
+    docs_used = len(result.get("distilled_sources", [])) or docs_loaded
+    dropped_docs = result.get("dropped_documents", [])
+    truncated = bool(result.get("truncated", False))
     estimated_input_tokens = result.get("estimated_tokens", 0)
     actual_tokens = result.get("actual_tokens", 0)
     in_tokens = result.get("llm_input_tokens", 0)
     out_tokens = result.get("llm_output_tokens", 0)
+    cond_in = result.get("condense_input_tokens", 0)
+    cond_out = result.get("condense_output_tokens", 0)
 
     if is_url:
         sitemap_mode = (
@@ -225,11 +256,17 @@ def main(
 
     typer.echo("Summary:")
     typer.echo(f"  Source: {source_desc}")
-    typer.echo(f"  Documents loaded: {docs_loaded}")
+    if truncated and dropped_docs:
+        typer.echo(f"  Dropped: {len(dropped_docs)} docs (context limit)")
+    typer.echo(f"  Documents used: {docs_used}")
     typer.echo(f"  Estimated input tokens: {estimated_input_tokens}")
     if actual_tokens > 0:
         typer.echo(
             f"  Actual tokens used: {actual_tokens} (in: {in_tokens}, out: {out_tokens})"
+        )
+    if cond_in + cond_out > 0:
+        typer.echo(
+            f"  Condensed tokens: in {cond_in}, out {cond_out} (total {cond_in + cond_out})"
         )
     typer.echo(f"  Output: {output_path}")
 

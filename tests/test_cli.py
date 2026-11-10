@@ -1,9 +1,13 @@
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from typer.testing import CliRunner
 
 from doc2skill.cli import app
+from doc2skill.distill.condense import CondensedResult
+from doc2skill.ingest.base import Document
+from doc2skill.llm.base import FrontmatterResult
 
 runner = CliRunner()
 
@@ -43,7 +47,7 @@ def test_cli_execution_and_caching(
     )
     assert result1.exit_code == 0
     assert "Summary:" in result1.output
-    assert "Documents loaded: 1" in result1.output
+    assert "Documents used: 1" in result1.output
     assert "Estimated input tokens:" in result1.output
     assert "Output:" in result1.output
     assert "Cache hit" not in result1.output
@@ -67,7 +71,7 @@ def test_cli_execution_and_caching(
     )
     assert result3.exit_code == 0
     assert "Cache hit" not in result3.output
-    assert "Documents loaded: 1" in result3.output
+    assert "Documents used: 1" in result3.output
 
 
 def test_cli_budget_exceeded_fallback(
@@ -106,7 +110,7 @@ def test_cli_no_llm_flag(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    """Test CLI --no-llm flag forces fallback frontmatter without errors."""
+    """Test CLI --no-llm flag forces fallback frontmatter and raw body without errors."""
     cache_dir = tmp_path / "cache"
     output_dir = tmp_path / "output"
     monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(cache_dir))
@@ -123,7 +127,7 @@ def test_cli_no_llm_flag(
     )
     assert result.exit_code == 0
     assert "LLM skipped (--no-llm). Used fallback frontmatter." in result.output
-    assert "Documents loaded: 1" in result.output
+    assert "Documents used: 1" in result.output
 
 
 def test_summary_printed_once(
@@ -137,10 +141,7 @@ def test_summary_printed_once(
     (fixture_dir / "index.md").write_text("# Doc\nSome text content.", encoding="utf-8")
 
     monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
-
-    # Stub LLM to return deterministic frontmatter
-    from unittest.mock import patch
-    from doc2skill.llm.base import FrontmatterResult
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
 
     stub_frontmatter = FrontmatterResult(
         description="Deterministic skill description.",
@@ -148,16 +149,36 @@ def test_summary_printed_once(
         input_tokens=80,
         output_tokens=25,
     )
+    stub_condensed = CondensedResult(
+        body="## API surface\n`func()`\n\n## Common workflows\n1. Call func.\n\n## Gotchas\nNone.\n\n## Reference\nindex.md",
+        sources=["index.md"],
+        input_tokens=200,
+        output_tokens=150,
+        dropped_documents=[],
+        truncated=False,
+    )
 
-    with patch(
-        "doc2skill.pipeline.graph.GeminiProvider.synthesize_frontmatter",
-        return_value=stub_frontmatter,
+    with (
+        patch("doc2skill.pipeline.graph.GeminiProvider.count_tokens", return_value=100),
+        patch(
+            "doc2skill.pipeline.graph.GeminiProvider.synthesize_frontmatter",
+            return_value=stub_frontmatter,
+        ),
+        patch(
+            "doc2skill.distill.condense.condense",
+            new_callable=AsyncMock,
+            return_value=stub_condensed,
+        ),
     ):
-        result = cli_runner.invoke(app, ["build", str(fixture_dir), "--no-cache"])
+        result = cli_runner.invoke(
+            app,
+            ["build", str(fixture_dir), "--output", str(tmp_path / "out"), "--no-cache"],
+        )
 
     assert result.exit_code == 0
     assert result.output.count("Estimated input tokens") == 1
     assert result.output.count("Actual tokens used") == 1
+    assert "Condensed tokens: in 200, out 150 (total 350)" in result.output
 
 
 def test_cli_summary_prints_estimated_tokens_exactly_once(
@@ -174,16 +195,11 @@ def test_cli_summary_prints_estimated_tokens_exactly_once(
         [str(cli_docs_dir), "--output", str(output_dir), "--no-llm", "--no-cache"],
     )
     assert result.exit_code == 0
-    # Assert 'Estimated input tokens' appears exactly once
     assert result.output.count("Estimated input tokens") == 1
 
 
 def test_cli_url_single_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Verify CLI accepts URL source and outputs single-page summary."""
-    from unittest.mock import AsyncMock, patch
-
-    from doc2skill.ingest.base import Document
-
     output_dir = tmp_path / "output"
     monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
 
@@ -210,17 +226,13 @@ def test_cli_url_single_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     assert result.exit_code == 0
     assert "Source: https://example.com/guide (single page)" in result.output
-    assert "Documents loaded: 1" in result.output
+    assert "Documents used: 1" in result.output
     assert result.output.count("Estimated input tokens") == 1
     assert (output_dir / "guide" / "SKILL.md").exists()
 
 
 def test_cli_url_sitemap_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Verify CLI with sitemap outputs sitemap page count in summary."""
-    from unittest.mock import AsyncMock, patch
-
-    from doc2skill.ingest.base import Document
-
     output_dir = tmp_path / "output"
     monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
 
@@ -251,5 +263,111 @@ def test_cli_url_sitemap_summary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 
     assert result.exit_code == 0
     assert "Source: https://example.com/docs (sitemap, 2 pages)" in result.output
-    assert "Documents loaded: 2" in result.output
+    assert "Documents used: 2" in result.output
     assert result.output.count("Estimated input tokens") == 1
+
+
+def test_cli_no_condense_flag(
+    cli_docs_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verify --no-condense runs frontmatter synthesis but keeps raw concatenated docs."""
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
+
+    stub_frontmatter = FrontmatterResult(
+        description="Frontmatter description only.",
+        when_to_use="- When testing --no-condense",
+        input_tokens=40,
+        output_tokens=15,
+    )
+
+    with (
+        patch("doc2skill.pipeline.graph.GeminiProvider.count_tokens", return_value=40),
+        patch(
+            "doc2skill.pipeline.graph.GeminiProvider.synthesize_frontmatter",
+            return_value=stub_frontmatter,
+        ),
+        patch(
+            "doc2skill.distill.condense.condense",
+            side_effect=AssertionError("condense must NOT run when --no-condense is passed"),
+        ),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                str(cli_docs_dir),
+                "--output",
+                str(output_dir),
+                "--no-condense",
+                "--no-cache",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Condensed tokens:" not in result.output
+    skill_text = (output_dir / "cli-sample" / "SKILL.md").read_text(encoding="utf-8")
+    assert "### main.md" in skill_text
+    assert "Testing the doc2skill command line interface." in skill_text
+
+
+def test_cli_max_output_and_context_tokens_flags(
+    cli_docs_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Verify --max-output-tokens and --max-context-tokens forward through to condense."""
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
+
+    captured: dict = {}
+
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        captured["max_output_tokens"] = max_output_tokens
+        captured["max_context_tokens"] = max_context_tokens
+        return CondensedResult(
+            body="## API surface\n`x()`\n\n## Common workflows\n1. Run.\n\n## Gotchas\nNone.\n\n## Reference\nmain.md",
+            sources=["main.md"],
+            input_tokens=100,
+            output_tokens=600,
+            dropped_documents=[],
+            truncated=False,
+        )
+
+    stub_frontmatter = FrontmatterResult(
+        description="CLI flags test.",
+        when_to_use="- When passing flags",
+        input_tokens=40,
+        output_tokens=15,
+    )
+
+    with (
+        patch("doc2skill.pipeline.graph.GeminiProvider.count_tokens", return_value=40),
+        patch(
+            "doc2skill.pipeline.graph.GeminiProvider.synthesize_frontmatter",
+            return_value=stub_frontmatter,
+        ),
+        patch("doc2skill.distill.condense.condense", side_effect=fake_condense),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                str(cli_docs_dir),
+                "--output",
+                str(output_dir),
+                "--max-output-tokens",
+                "9000",
+                "--max-context-tokens",
+                "120000",
+                "--no-cache",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert captured["max_output_tokens"] == 9000
+    assert captured["max_context_tokens"] == 120000

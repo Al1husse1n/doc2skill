@@ -38,6 +38,26 @@ def estimate_prompt_tokens(
     return max(1, total_chars // 4)
 
 
+def estimate_condense_tokens(
+    documents: Sequence[Document],
+    provider: Any | None = None,
+) -> int:
+    """Pre-call estimate for full-corpus condensation input prompt."""
+    if not documents:
+        return 0
+
+    from doc2skill.distill.condense import build_condense_prompt
+
+    prompt = build_condense_prompt(documents)
+    if provider is not None and hasattr(provider, "count_tokens"):
+        try:
+            return provider.count_tokens(prompt)
+        except (OSError, RuntimeError, ValueError, AttributeError):
+            pass
+
+    return max(1, len(prompt) // 4)
+
+
 def estimate_tokens(text: str) -> int:
     """Public helper for estimated token count."""
     return fallback_estimate_tokens(text)

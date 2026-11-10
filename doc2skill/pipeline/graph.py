@@ -1,14 +1,37 @@
+import asyncio
+import concurrent.futures
+import inspect
 import os
 from typing import Literal
 
 from google.genai import errors as genai_errors
 from langgraph.graph import END, START, StateGraph
 
-from doc2skill.budget.guard import DEFAULT_MAX_TOKENS, estimate_prompt_tokens
-from doc2skill.emit.skill import derive_skill_name, render_skill_md, write_skill_file
+from doc2skill.budget.guard import (
+    DEFAULT_MAX_TOKENS,
+    estimate_condense_tokens,
+    estimate_prompt_tokens,
+)
+from doc2skill.emit.skill import (
+    derive_skill_name,
+    extract_description,
+    format_raw_documents_body,
+    render,
+    write_skill_file,
+)
 from doc2skill.ingest.markdown import load_markdown_directory
-from doc2skill.llm.gemini import GeminiProvider
+from doc2skill.llm.gemini import DEFAULT_MODEL, GeminiProvider
 from doc2skill.pipeline.state import PipelineState
+
+
+def _run_async(coro):
+    """Run an async coroutine from a sync node regardless of active event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 def load_documents_node(state: PipelineState) -> dict:
@@ -17,7 +40,10 @@ def load_documents_node(state: PipelineState) -> dict:
     if preloaded:
         return {
             "documents": preloaded,
-            "distilled": list(preloaded),
+            "distilled": "",
+            "distilled_sources": [doc.path for doc in preloaded],
+            "dropped_documents": [],
+            "truncated": False,
             "errors": list(state.get("errors", [])),
         }
 
@@ -26,11 +52,10 @@ def load_documents_node(state: PipelineState) -> dict:
 
     if source_path.startswith(("http://", "https://")):
         try:
-            import asyncio
             from doc2skill.ingest.url import load_url
 
             max_pages = state.get("max_pages", 100)
-            documents = asyncio.run(load_url(source_path, max_pages=max_pages))
+            documents = _run_async(load_url(source_path, max_pages=max_pages))
         except (OSError, ValueError, RuntimeError) as exc:
             errors.append(f"Failed to load URL documents: {exc}")
             return {"documents": [], "errors": errors, "estimated_tokens": 0}
@@ -43,25 +68,32 @@ def load_documents_node(state: PipelineState) -> dict:
 
     return {
         "documents": documents,
-        "distilled": list(documents),
+        "distilled": "",
+        "distilled_sources": [doc.path for doc in documents],
+        "dropped_documents": [],
+        "truncated": False,
         "errors": errors,
     }
 
 
 def budget_guard_node(state: PipelineState) -> dict:
-    """Pre-check input token count before making any LLM calls."""
+    """Pre-check total input token count (frontmatter + condensation) before LLM calls."""
     documents = state.get("documents", [])
     max_tokens = state.get("max_tokens", DEFAULT_MAX_TOKENS)
     no_llm = state.get("no_llm", False)
+    no_condense = state.get("no_condense", False)
     provider = state.get("llm_provider")
+    selected_model = state.get("model") or os.getenv("DOC2SKILL_LLM_MODEL", DEFAULT_MODEL)
 
     if provider is None and not no_llm and os.environ.get("GEMINI_API_KEY"):
         try:
-            provider = GeminiProvider(model=state.get("model", "gemini-2.5-flash"))
+            provider = GeminiProvider(model=selected_model)
         except (RuntimeError, ValueError, OSError):
             provider = None
 
-    estimated = estimate_prompt_tokens(documents, provider=provider)
+    frontmatter_est = estimate_prompt_tokens(documents, provider=provider)
+    condense_est = 0 if no_condense else estimate_condense_tokens(documents, provider=provider)
+    estimated = frontmatter_est + condense_est
     errors = list(state.get("errors", []))
 
     if no_llm:
@@ -71,7 +103,7 @@ def budget_guard_node(state: PipelineState) -> dict:
             "llm_provider": provider,
         }
 
-    # Pre-call budget enforcement
+    # Pre-call budget enforcement: blocks both frontmatter & condense calls
     if estimated > max_tokens:
         errors.append(
             f"Budget exceeded: estimated {estimated} input tokens > max {max_tokens}. LLM call skipped."
@@ -101,52 +133,95 @@ def should_distill(state: PipelineState) -> Literal["distill", "skip"]:
     """Conditional router: skip LLM distill if budget exceeded or no-llm requested."""
     if state.get("skip_llm") or state.get("no_llm"):
         return "skip"
-    # Skip if errors other than budget exceeded exist
-    if any("Failed to load documents" in err for err in state.get("errors", [])):
+    if any("Failed to load" in err for err in state.get("errors", [])):
         return "skip"
     return "distill"
 
 
 def distill_node(state: PipelineState) -> dict:
-    """Invoke LLM provider to synthesize frontmatter metadata."""
+    """Invoke LLM provider to synthesize frontmatter and condense the document corpus."""
     documents = state.get("documents", [])
     provider = state.get("llm_provider")
     errors = list(state.get("errors", []))
+    selected_model = state.get("model") or os.getenv("DOC2SKILL_LLM_MODEL", DEFAULT_MODEL)
+    no_condense = state.get("no_condense", False)
 
-    if provider is None:
-        try:
-            provider = GeminiProvider(model=state.get("model", "gemini-2.5-flash"))
-        except (RuntimeError, ValueError, OSError) as exc:
-            errors.append(f"Failed to initialize LLM provider: {exc}")
-            return {
-                "distilled": list(documents),
-                "frontmatter": None,
-                "errors": errors,
-            }
-
-    try:
-        result = provider.synthesize_frontmatter(
-            documents, max_tokens=state.get("max_tokens", 1000)
-        )
-        actual_tokens = result.input_tokens + result.output_tokens
-        frontmatter = {
-            "description": result.description,
-            "when_to_use": result.when_to_use,
-        }
+    def _fallback_result(err_msg: str | None = None) -> dict:
+        if err_msg:
+            errors.append(err_msg)
         return {
-            "distilled": list(documents),
-            "frontmatter": frontmatter,
-            "actual_tokens": actual_tokens,
-            "llm_input_tokens": result.input_tokens,
-            "llm_output_tokens": result.output_tokens,
-        }
-    except (genai_errors.APIError, RuntimeError, ValueError, OSError) as exc:
-        errors.append(f"LLM synthesis failed: {exc}")
-        return {
-            "distilled": list(documents),
+            "distilled": format_raw_documents_body(documents),
+            "distilled_sources": [doc.path for doc in documents],
+            "dropped_documents": [],
+            "truncated": False,
             "frontmatter": None,
             "errors": errors,
         }
+
+    if provider is None:
+        try:
+            provider = GeminiProvider(model=selected_model)
+        except (RuntimeError, ValueError, OSError) as exc:
+            return _fallback_result(f"Failed to initialize LLM provider: {exc}")
+
+    try:
+        fm_result = provider.synthesize_frontmatter(
+            documents, max_tokens=state.get("max_tokens", 1000)
+        )
+        frontmatter = {
+            "description": fm_result.description,
+            "when_to_use": fm_result.when_to_use,
+        }
+        in_tokens = fm_result.input_tokens
+        out_tokens = fm_result.output_tokens
+
+        if no_condense:
+            return {
+                "distilled": format_raw_documents_body(documents),
+                "distilled_sources": [doc.path for doc in documents],
+                "dropped_documents": [],
+                "truncated": False,
+                "frontmatter": frontmatter,
+                "condense_input_tokens": 0,
+                "condense_output_tokens": 0,
+                "llm_input_tokens": in_tokens,
+                "llm_output_tokens": out_tokens,
+                "actual_tokens": in_tokens + out_tokens,
+            }
+
+        from doc2skill.distill.condense import condense
+
+        condense_kwargs: dict = {
+            "documents": documents,
+            "model": selected_model,
+            "max_output_tokens": state.get("max_output_tokens", 15_000),
+            "max_context_tokens": state.get("max_context_tokens", 500_000),
+        }
+        provider_client = getattr(provider, "client", None)
+        if (
+            provider_client is not None
+            and "client" in inspect.signature(condense).parameters
+        ):
+            condense_kwargs["client"] = provider_client
+
+        cond_result = _run_async(condense(**condense_kwargs))
+
+        total_in = in_tokens + cond_result.input_tokens
+        total_out = out_tokens + cond_result.output_tokens
+        return {
+            "distilled": cond_result.body,
+            "distilled_sources": cond_result.sources,
+            "dropped_documents": cond_result.dropped_documents,
+            "truncated": cond_result.truncated,
+            "frontmatter": frontmatter,
+            "condense_input_tokens": cond_result.input_tokens,
+            "condense_output_tokens": cond_result.output_tokens,
+            "llm_input_tokens": total_in,
+            "llm_output_tokens": total_out,
+            "actual_tokens": total_in + total_out,
+        }
+    except (genai_errors.APIError, RuntimeError, ValueError, OSError) as exc:
+        return _fallback_result(f"LLM synthesis failed: {exc}")
 
 
 def budget_record_node(state: PipelineState) -> dict:
@@ -160,27 +235,40 @@ def budget_record_node(state: PipelineState) -> dict:
             f"Budget warning: actual {actual} tokens exceeded maximum allowed {max_tokens}."
         )
 
-    distilled = state.get("distilled") or state.get("documents", [])
-    return {"warnings": warnings, "distilled": distilled}
+    raw_docs = state.get("documents", [])
+    distilled = state.get("distilled") or format_raw_documents_body(raw_docs)
+    distilled_sources = state.get("distilled_sources") or [d.path for d in raw_docs]
+    return {
+        "warnings": warnings,
+        "distilled": distilled,
+        "distilled_sources": distilled_sources,
+    }
 
 
 def emit_skill_node(state: PipelineState) -> dict:
-    """Render and write SKILL.md output using synthesized or fallback frontmatter."""
+    """Render and write SKILL.md output using condensed body, sources, and frontmatter."""
     source_path = state.get("source_path", "")
-    documents = state.get("distilled") or state.get("documents", [])
+    raw_docs = state.get("documents", [])
+    body = state.get("distilled") or format_raw_documents_body(raw_docs)
+    sources = state.get("distilled_sources") or [doc.path for doc in raw_docs]
     skill_name = derive_skill_name(source_path) if source_path else "skill"
     frontmatter = state.get("frontmatter")
+    fallback_desc = extract_description(raw_docs)
 
-    skill_md = render_skill_md(
-        documents,
-        skill_name=skill_name,
-        source_path=source_path,
+    resolved_name, skill_md = render(
+        body=body,
+        sources=sources,
         frontmatter=frontmatter,
+        source_path=source_path,
+        skill_name=skill_name,
+        fallback_description=fallback_desc,
     )
 
     output_dir = state.get("output_dir", "./output")
-    out_file = write_skill_file(skill_md, skill_name, output_dir=output_dir)
+    out_file = write_skill_file(skill_md, resolved_name, output_dir=output_dir)
     return {
+        "distilled": body,
+        "distilled_sources": sources,
         "skill_md": skill_md,
         "output_path": str(out_file),
     }

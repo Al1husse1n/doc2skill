@@ -51,6 +51,7 @@ def test_pipeline_budget_guard_within_limit(docs_directory: Path, tmp_path: Path
         source_path=str(docs_directory),
         max_tokens=50_000,
         output_dir=str(tmp_path / "output"),
+        no_llm=True,
     )
 
     result = graph.invoke(initial_state)

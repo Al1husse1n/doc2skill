@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 from doc2skill.ingest.base import Document
 
 DEFAULT_MAX_DESC_LENGTH = 200
+FALLBACK_WHEN_TO_USE = "(placeholder — will be LLM-generated later)"
 
 
 def derive_skill_name(source_path: str | Path) -> str:
@@ -25,10 +26,15 @@ def derive_skill_name(source_path: str | Path) -> str:
 
     if not raw_name or raw_name == ".":
         raw_name = "skill"
-    # Convert spaces/underscores/dots to hyphens and keep alphanumeric/hyphen
     slug = re.sub(r"[_\s.]+", "-", raw_name)
     slug = re.sub(r"[^a-zA-Z0-9-]", "", slug).strip("-").lower()
     return slug or "skill"
+
+
+def format_skill_title(skill_name: str) -> str:
+    """Convert kebab-case skill slug into Title Case heading."""
+    parts = [part.capitalize() for part in skill_name.split("-") if part]
+    return " ".join(parts) if parts else "Skill"
 
 
 def extract_description(
@@ -42,14 +48,12 @@ def extract_description(
     first_doc = documents[0]
     content = first_doc.content
 
-    # Strip UTF-8 BOM if present
     text = content.lstrip("\ufeff").strip()
     if text.startswith("---"):
         parts = text.split("---", 2)
         if len(parts) >= 3:
             text = parts[2].strip()
 
-    # Split into paragraphs by double newlines
     paragraphs = text.split("\n\n")
 
     for block in paragraphs:
@@ -57,9 +61,8 @@ def extract_description(
         if not lines:
             continue
 
-        # If block starts with markdown heading, extract any subsequent non-heading lines
         if lines[0].startswith("#"):
-            non_heading = [l for l in lines if not l.startswith("#")]
+            non_heading = [line for line in lines if not line.startswith("#")]
             if not non_heading:
                 continue
             paragraph_text = " ".join(non_heading).strip()
@@ -71,59 +74,60 @@ def extract_description(
                 return paragraph_text[: max_length - 3].rstrip() + "..."
             return paragraph_text
 
-    # Fallback if no paragraph found
     fallback_title = first_doc.title or "documentation"
     return f"Skill instructions and reference for {fallback_title}."
 
 
-def render_skill_md(
-    documents: Sequence[Document],
+def format_raw_documents_body(documents: Sequence[Document]) -> str:
+    """Render raw documents into v4 Reference concatenation for fallback / --no-condense."""
+    if not documents:
+        return "## Reference"
+    doc_blocks = [
+        f"### {doc.path}\n\n{doc.content.strip()}" for doc in documents
+    ]
+    reference_body = "\n\n---\n\n".join(doc_blocks)
+    return f"## Reference\n{reference_body}"
+
+
+def render(
+    body: str,
+    sources: Sequence[str],
+    frontmatter: dict[str, str] | None,
+    source_path: str | Path,
     skill_name: str | None = None,
-    source_path: str | Path | None = None,
-    frontmatter: dict[str, str] | None = None,
-) -> str:
-    """Generate SKILL.md markdown text from ingested documents and optional frontmatter."""
-    if not skill_name:
-        if source_path:
-            skill_name = derive_skill_name(source_path)
-        else:
-            skill_name = "skill"
+    fallback_description: str | None = None,
+) -> tuple[str, str]:
+    """Render final SKILL.md markdown and return (skill_name, skill_md)."""
+    resolved_name = skill_name or (derive_skill_name(source_path) if source_path else "skill")
+    title = format_skill_title(resolved_name)
 
     if frontmatter and frontmatter.get("description"):
         description = frontmatter["description"].strip()
-        when_to_use = frontmatter.get(
-            "when_to_use", "(placeholder — will be LLM-generated later)"
-        ).strip()
+        when_to_use = frontmatter.get("when_to_use", FALLBACK_WHEN_TO_USE).strip()
     else:
-        description = extract_description(documents)
-        when_to_use = "(placeholder — will be LLM-generated later)"
+        description = fallback_description or "Skill generated from documentation."
+        when_to_use = FALLBACK_WHEN_TO_USE
 
-    doc_blocks: list[str] = []
-    source_list: list[str] = []
-    for doc in documents:
-        clean_content = doc.content.strip()
-        doc_blocks.append(f"### {doc.path}\n\n{clean_content}")
-        source_list.append(f"- {doc.path}")
+    clean_body = body.strip()
+    source_lines = "\n".join(f"- {src}" for src in sources)
 
-    reference_body = "\n\n---\n\n".join(doc_blocks)
-    source_body = "\n".join(source_list)
-
-    return f"""---
-name: {skill_name}
+    skill_md = f"""---
+name: {resolved_name}
 description: {description}
 ---
 
-# {skill_name}
+# {title}
 
 ## When to use
 {when_to_use}
 
-## Reference
-{reference_body}
+{clean_body}
 
 ## Source
-{source_body}
+
+{source_lines}
 """
+    return resolved_name, skill_md
 
 
 def write_skill_file(
@@ -140,24 +144,22 @@ def write_skill_file(
 
 
 def emit_skill(
-    documents: Sequence[Document],
-    skill_name: str | None = None,
-    source_path: str | Path | None = None,
-    output_dir: str | Path = "./output",
+    body: str,
+    sources: Sequence[str],
     frontmatter: dict[str, str] | None = None,
+    source_path: str | Path = "",
+    output_dir: str | Path = "./output",
+    skill_name: str | None = None,
+    fallback_description: str | None = None,
 ) -> tuple[str, Path]:
-    """Render and write SKILL.md for given documents and frontmatter."""
-    if not skill_name:
-        if source_path:
-            skill_name = derive_skill_name(source_path)
-        else:
-            skill_name = "skill"
-
-    skill_md = render_skill_md(
-        documents,
-        skill_name=skill_name,
-        source_path=source_path,
+    """Render and write SKILL.md for condensed body, sources, and frontmatter."""
+    resolved_name, skill_md = render(
+        body=body,
+        sources=sources,
         frontmatter=frontmatter,
+        source_path=source_path,
+        skill_name=skill_name,
+        fallback_description=fallback_description,
     )
-    out_path = write_skill_file(skill_md, skill_name, output_dir=output_dir)
+    out_path = write_skill_file(skill_md, resolved_name, output_dir=output_dir)
     return skill_md, out_path
