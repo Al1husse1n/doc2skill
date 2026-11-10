@@ -1,9 +1,10 @@
+import logging
 from unittest.mock import MagicMock, patch
 
 import pytest
 from google.genai import errors as genai_errors
 
-from doc2skill.distill.condense import CondensedResult, build_condense_prompt, condense
+from doc2skill.distill.condense import CondensedResult, condense
 from doc2skill.ingest.base import Document
 
 
@@ -121,3 +122,89 @@ async def test_condense_no_retry_on_400():
         )
 
     assert mock_client.models.generate_content.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_condense_truncation_100_docs(caplog):
+    """100 fake docs x ~10k tokens exceeds limit -> drops deeply nested tail docs, logs warning."""
+    docs: list[Document] = []
+    # Mix shallow root docs and deeply nested docs (40_000 chars ~ 10_000 tokens each)
+    for i in range(50):
+        docs.append(
+            Document(
+                path=f"https://docs.example.com/core_{i:02d}.md",
+                content="A" * 40_000,
+                title=f"Core {i}",
+            )
+        )
+        docs.append(
+            Document(
+                path=f"https://docs.example.com/deep/nested/detail_{i:02d}.md",
+                content="B" * 40_000,
+                title=f"Detail {i}",
+            )
+        )
+
+    mock_client = MagicMock()
+
+    def fake_count_tokens(model: str, contents: str):
+        resp = MagicMock()
+        resp.total_tokens = len(contents) // 4
+        return resp
+
+    ok_resp = MagicMock()
+    ok_resp.text = "## API surface\n`Core()`\n\n## Common workflows\n1. Use core.\n\n## Gotchas\nLimits.\n\n## Reference\ncore"
+    ok_resp.usage_metadata.prompt_token_count = 150_000
+    ok_resp.usage_metadata.candidates_token_count = 1_200
+
+    mock_client.models.count_tokens.side_effect = fake_count_tokens
+    mock_client.models.generate_content.return_value = ok_resp
+
+    with caplog.at_level(logging.WARNING):
+        result = await condense(
+            documents=docs,
+            model="gemini-2.5-flash",
+            max_context_tokens=250_000,
+            client=mock_client,
+        )
+
+    assert result.truncated is True
+    assert len(result.dropped_documents) > 0
+    assert len(result.sources) >= 5
+    # Verify all 50 deeply nested documents were dropped BEFORE any shallow core docs
+    assert len(result.dropped_documents) > 50
+    assert all("/deep/nested/" in path for path in result.dropped_documents[:50])
+    assert not any("/deep/nested/" in path for path in result.sources)
+    # Verify count_tokens was re-checked after dropping
+    assert mock_client.models.count_tokens.call_count >= 2
+    assert "Dropped" in caplog.text
+    assert "to fit context" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_condense_truncation_refuses_below_5_docs():
+    """If even 5 documents exceed max_context_tokens, raise ValueError without calling LLM."""
+    docs = [
+        Document(
+            path=f"https://docs.example.com/huge_{i}.md",
+            content="X" * 400_000,
+            title=f"Huge {i}",
+        )
+        for i in range(5)
+    ]
+
+    mock_client = MagicMock()
+    count_resp = MagicMock()
+    count_resp.total_tokens = 5_000_000
+    mock_client.models.count_tokens.return_value = count_resp
+
+    with pytest.raises(ValueError, match="Docs exceed context limit even after truncation"):
+        await condense(
+            documents=docs,
+            model="gemini-2.5-flash",
+            max_context_tokens=500_000,
+            client=mock_client,
+        )
+
+    mock_client.models.generate_content.assert_not_called()
+
