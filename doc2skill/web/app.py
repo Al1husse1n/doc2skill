@@ -108,6 +108,7 @@ def create_app() -> FastAPI:
             pipeline_event_stream(
                 source=source,
                 source_type=payload.source_type,
+                max_pages=payload.max_pages,
                 max_tokens=payload.max_tokens,
                 no_llm=payload.no_llm,
                 request=request,

@@ -148,6 +148,7 @@ def _map_node_update(
 async def pipeline_event_stream(
     source: str,
     source_type: str = "url",
+    max_pages: int = 100,
     max_tokens: int = 50_000,
     no_llm: bool = False,
     request: Request | None = None,
@@ -166,6 +167,7 @@ async def pipeline_event_stream(
             max_tokens=max_tokens,
             output_dir=tmp_dir,
             no_llm=no_llm,
+            max_pages=max_pages,
         )
         model_name = str(state.get("model", "gemini-2.5-flash"))
 
@@ -212,3 +214,4 @@ async def pipeline_event_stream(
                 "message": "Pipeline completed without generating SKILL.md",
             },
         )
+

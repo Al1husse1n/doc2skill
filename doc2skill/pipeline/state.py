@@ -18,6 +18,7 @@ class PipelineState(TypedDict, total=False):
     errors: list[str]
     warnings: list[str]
     max_tokens: int
+    max_pages: int
     output_dir: str
     output_path: str | None
     frontmatter: dict[str, str] | None
@@ -35,6 +36,7 @@ def create_initial_state(
     model: str | None = None,
     llm_provider: Any = None,
     documents: list[Document] | None = None,
+    max_pages: int = 100,
 ) -> PipelineState:
     """Helper to initialize a fresh PipelineState dictionary."""
     selected_model = model or os.getenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
@@ -51,6 +53,7 @@ def create_initial_state(
         "errors": [],
         "warnings": [],
         "max_tokens": max_tokens,
+        "max_pages": max_pages,
         "output_dir": output_dir,
         "output_path": None,
         "frontmatter": None,

@@ -164,6 +164,7 @@ def main(
         no_llm=no_llm,
         model=selected_model,
         documents=loaded_documents,
+        max_pages=max_pages,
     )
 
     result = graph.invoke(initial_state)

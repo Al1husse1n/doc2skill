@@ -324,3 +324,34 @@ def test_serve_command_smoke(monkeypatch: pytest.MonkeyPatch):
     assert calls[-1]["host"] == "0.0.0.0"
     assert calls[-1]["port"] == 8765
 
+
+@pytest.mark.asyncio
+async def test_build_respects_max_pages(monkeypatch: pytest.MonkeyPatch):
+    """Verify BuildRequest.max_pages passes through pipeline to load_url."""
+    captured: dict[str, int] = {}
+
+    async def fake_load_url(url: str, max_pages: int = 100):
+        captured["max_pages"] = max_pages
+        return [Document(path=url, title="x", content="y")]
+
+    monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/build",
+            json={
+                "source": "https://fake-maxpages.example.com/",
+                "source_type": "url",
+                "max_pages": 7,
+                "max_tokens": 50_000,
+                "no_cache": True,
+                "no_llm": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert captured["max_pages"] == 7
+
+

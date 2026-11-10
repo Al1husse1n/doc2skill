@@ -29,7 +29,8 @@ def load_documents_node(state: PipelineState) -> dict:
             import asyncio
             from doc2skill.ingest.url import load_url
 
-            documents = asyncio.run(load_url(source_path))
+            max_pages = state.get("max_pages", 100)
+            documents = asyncio.run(load_url(source_path, max_pages=max_pages))
         except (OSError, ValueError, RuntimeError) as exc:
             errors.append(f"Failed to load URL documents: {exc}")
             return {"documents": [], "errors": errors, "estimated_tokens": 0}
