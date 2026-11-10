@@ -4,6 +4,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from doc2skill.distill.condense import CondensedResult
+from doc2skill.ingest.base import Document
+from doc2skill.llm.base import FrontmatterResult
 from doc2skill.llm.gemini import GeminiProvider
 from doc2skill.pipeline.graph import build_pipeline_graph
 from doc2skill.pipeline.state import create_initial_state
@@ -135,3 +138,111 @@ def test_budget_guard_allows_llm_when_within_budget(
     assert "description: Synthesized agent skill." in content
     assert "## When to use\n- Trigger scenario 1\n- Trigger scenario 2" in content
     assert "## API surface" in content
+
+
+def test_budget_guard_estimates_post_truncation_corpus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """truncate runs before budget_guard so budget pre-check and condense both see 49 docs."""
+    docs = [
+        Document(
+            path=f"https://docs.example.com/deep/page_{i:02d}"
+            if i >= 50
+            else f"https://docs.example.com/page_{i:02d}",
+            content="Z" * 40_000,
+            title=f"Page {i}",
+        )
+        for i in range(100)
+    ]
+
+    captured: dict[str, int] = {}
+
+    def fake_count_tokens(self, prompt: str) -> int:
+        if "Documentation snippets" in prompt:
+            return 100
+        return prompt.count("=== DOCUMENT:") * 2000
+
+    def fake_synthesize(self, documents, max_tokens: int = 1000) -> FrontmatterResult:
+        captured["fm_n_docs"] = len(documents)
+        return FrontmatterResult(
+            description="Post-truncation skill.",
+            when_to_use="- Trigger 1\n- Trigger 2",
+            input_tokens=100,
+            output_tokens=20,
+        )
+
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        captured["condense_n_docs"] = len(documents)
+        return CondensedResult(
+            body=(
+                "## API surface\n`Client()`\n\n"
+                "## Common workflows\n1. Use client safely.\n\n"
+                "## Gotchas\nRespect context limit.\n\n"
+                "## Reference\ncore"
+            ),
+            sources=[d.path for d in documents],
+            input_tokens=len(documents) * 2000,
+            output_tokens=400,
+            dropped_documents=[],
+            truncated=False,
+        )
+
+    monkeypatch.setattr(GeminiProvider, "count_tokens", fake_count_tokens)
+    monkeypatch.setattr(GeminiProvider, "synthesize_frontmatter", fake_synthesize)
+    monkeypatch.setattr("doc2skill.distill.condense.condense", fake_condense)
+
+    provider = GeminiProvider(api_key="mock-key", model="gemini-2.5-flash", client=MagicMock())
+    graph = build_pipeline_graph()
+
+    # 100 docs = 200,100 tokens (> 150,000), while 49 post-truncation docs = 98,100 tokens (<= 150,000)
+    initial_state = create_initial_state(
+        source_path="https://docs.example.com/",
+        documents=docs,
+        max_tokens=150_000,
+        max_context_tokens=500_000,
+        output_dir=str(tmp_path / "output"),
+        llm_provider=provider,
+    )
+
+    result = graph.invoke(initial_state)
+
+    assert not result.get("errors"), f"Unexpected errors: {result.get('errors')}"
+    assert result["estimated_tokens"] == 49 * 2000 + 100
+    assert result["truncated"] is True
+    assert len(result["dropped_documents"]) == 51
+    assert captured["fm_n_docs"] == 49
+    assert captured["condense_n_docs"] == 49
+
+
+def test_truncate_skipped_when_no_condense(tmp_path: Path):
+    """truncate_node does not drop documents when no_condense=True; budget_guard sees all raw docs."""
+    docs = [
+        Document(path=f"doc_{i}.md", content="X" * 200, title=f"Doc {i}")
+        for i in range(10)
+    ]
+
+    mock_client = MagicMock()
+    mock_count_resp = MagicMock()
+    mock_count_resp.total_tokens = 300
+    mock_client.models.count_tokens.return_value = mock_count_resp
+    provider = GeminiProvider(api_key="mock-key", model="gemini-2.5-flash", client=mock_client)
+
+    graph = build_pipeline_graph()
+    initial_state = create_initial_state(
+        source_path="raw_docs",
+        documents=docs,
+        max_tokens=100,
+        max_context_tokens=50,
+        output_dir=str(tmp_path / "output"),
+        no_condense=True,
+        llm_provider=provider,
+    )
+
+    result = graph.invoke(initial_state)
+
+    assert result["truncated"] is False
+    assert result["dropped_documents"] == []
+    assert len(result["documents"]) == 10
+    assert any("Budget exceeded" in err for err in result["errors"])

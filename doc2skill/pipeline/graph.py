@@ -12,6 +12,7 @@ from doc2skill.budget.guard import (
     estimate_condense_tokens,
     estimate_prompt_tokens,
 )
+from doc2skill.distill.condense import fit_documents_to_context
 from doc2skill.emit.skill import (
     derive_skill_name,
     extract_description,
@@ -76,8 +77,36 @@ def load_documents_node(state: PipelineState) -> dict:
     }
 
 
+def truncate_node(state: PipelineState) -> dict:
+    """Truncate documents to max_context_tokens before budget pre-check and LLM calls."""
+    documents = state.get("documents", [])
+    if state.get("no_llm") or state.get("no_condense") or not documents:
+        return {"dropped_documents": [], "truncated": False}
+
+    selected_model = state.get("model") or os.getenv("DOC2SKILL_LLM_MODEL", DEFAULT_MODEL)
+    max_context_tokens = state.get("max_context_tokens", 500_000)
+    try:
+        kept, dropped, _ = fit_documents_to_context(
+            documents, selected_model, max_context_tokens, client=None
+        )
+    except ValueError as exc:
+        errors = list(state.get("errors", []))
+        errors.append(str(exc))
+        return {"errors": errors, "skip_llm": True}
+
+    return {
+        "documents": kept,
+        "distilled_sources": [doc.path for doc in kept],
+        "dropped_documents": dropped,
+        "truncated": bool(dropped),
+    }
+
+
 def budget_guard_node(state: PipelineState) -> dict:
     """Pre-check total input token count (frontmatter + condensation) before LLM calls."""
+    if state.get("skip_llm") or state.get("errors"):
+        return {"estimated_tokens": 0, "skip_llm": True, "llm_provider": None}
+
     documents = state.get("documents", [])
     max_tokens = state.get("max_tokens", DEFAULT_MAX_TOKENS)
     no_llm = state.get("no_llm", False)
@@ -152,8 +181,8 @@ def distill_node(state: PipelineState) -> dict:
         return {
             "distilled": format_raw_documents_body(documents),
             "distilled_sources": [doc.path for doc in documents],
-            "dropped_documents": [],
-            "truncated": False,
+            "dropped_documents": list(state.get("dropped_documents") or []),
+            "truncated": bool(state.get("truncated", False)),
             "frontmatter": None,
             "errors": errors,
         }
@@ -179,8 +208,8 @@ def distill_node(state: PipelineState) -> dict:
             return {
                 "distilled": format_raw_documents_body(documents),
                 "distilled_sources": [doc.path for doc in documents],
-                "dropped_documents": [],
-                "truncated": False,
+                "dropped_documents": list(state.get("dropped_documents") or []),
+                "truncated": bool(state.get("truncated", False)),
                 "frontmatter": frontmatter,
                 "condense_input_tokens": 0,
                 "condense_output_tokens": 0,
@@ -208,11 +237,16 @@ def distill_node(state: PipelineState) -> dict:
 
         total_in = in_tokens + cond_result.input_tokens
         total_out = out_tokens + cond_result.output_tokens
+        merged_dropped = list(
+            dict.fromkeys(
+                [*(state.get("dropped_documents") or []), *cond_result.dropped_documents]
+            )
+        )
         return {
             "distilled": cond_result.body,
             "distilled_sources": cond_result.sources,
-            "dropped_documents": cond_result.dropped_documents,
-            "truncated": cond_result.truncated,
+            "dropped_documents": merged_dropped,
+            "truncated": bool(state.get("truncated") or cond_result.truncated),
             "frontmatter": frontmatter,
             "condense_input_tokens": cond_result.input_tokens,
             "condense_output_tokens": cond_result.output_tokens,
@@ -277,18 +311,20 @@ def emit_skill_node(state: PipelineState) -> dict:
 def build_pipeline_graph():
     """Build and compile the LangGraph pipeline:
 
-    load_documents -> budget_guard -> [distill ->] budget_record -> emit_skill
+    load_documents -> truncate -> budget_guard -> [distill ->] budget_record -> emit_skill
     """
     workflow = StateGraph(PipelineState)
 
     workflow.add_node("load_documents", load_documents_node)
+    workflow.add_node("truncate", truncate_node)
     workflow.add_node("budget_guard", budget_guard_node)
     workflow.add_node("distill", distill_node)
     workflow.add_node("budget_record", budget_record_node)
     workflow.add_node("emit_skill", emit_skill_node)
 
     workflow.add_edge(START, "load_documents")
-    workflow.add_edge("load_documents", "budget_guard")
+    workflow.add_edge("load_documents", "truncate")
+    workflow.add_edge("truncate", "budget_guard")
     workflow.add_conditional_edges(
         "budget_guard",
         should_distill,

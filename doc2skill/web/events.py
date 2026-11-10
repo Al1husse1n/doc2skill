@@ -8,7 +8,6 @@ from typing import Any
 from fastapi import Request
 
 from doc2skill.cache import disk as cache
-from doc2skill.distill.condense import fit_documents_to_context
 from doc2skill.emit.skill import derive_skill_name
 from doc2skill.llm.gemini import DEFAULT_MODEL
 from doc2skill.pipeline.graph import build_pipeline_graph
@@ -83,31 +82,33 @@ def _map_node_update(
                 },
             )
         ]
+        return events, "truncate", False
 
-        if not no_llm and not no_condense:
-            try:
-                _, pre_dropped, _ = fit_documents_to_context(
-                    docs, model_name, max_context_tokens, client=None
-                )
-            except ValueError as exc:
-                events.append(
-                    sse_event("error", {"stage": "ingest", "message": str(exc)})
-                )
-                return events, None, True
+    if node_name == "truncate":
+        errors = payload.get("errors") or []
+        if errors:
+            return (
+                [sse_event("error", {"stage": "truncate", "message": errors[-1]})],
+                None,
+                True,
+            )
 
-            if pre_dropped:
-                run_meta["truncate_warning_emitted"] = True
-                run_meta["truncated"] = True
-                run_meta["dropped_documents"] = list(pre_dropped)
-                events.append(
-                    sse_event(
-                        "truncate_warning",
-                        {
-                            "dropped_count": len(pre_dropped),
-                            "reason": "context_limit",
-                        },
-                    )
+        events: list[dict[str, str]] = []
+        dropped = list(payload.get("dropped_documents") or [])
+        is_truncated = bool(payload.get("truncated", False))
+        if is_truncated or dropped:
+            run_meta["truncate_warning_emitted"] = True
+            run_meta["truncated"] = True
+            run_meta["dropped_documents"] = dropped
+            events.append(
+                sse_event(
+                    "truncate_warning",
+                    {
+                        "dropped_count": len(dropped),
+                        "reason": "context_limit",
+                    },
                 )
+            )
 
         return events, "budget", False
 

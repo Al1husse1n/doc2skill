@@ -231,9 +231,11 @@ def main(
     if not no_cache and not no_condense:
         cache.set(key, skill_md)
 
-    docs_loaded = len(result.get("documents", []))
-    docs_used = len(result.get("distilled_sources", [])) or docs_loaded
     dropped_docs = result.get("dropped_documents", [])
+    docs_loaded = len(result.get("documents", [])) + len(dropped_docs)
+    docs_used = len(result.get("distilled_sources", [])) or len(
+        result.get("documents", [])
+    )
     truncated = bool(result.get("truncated", False))
     estimated_input_tokens = result.get("estimated_tokens", 0)
     actual_tokens = result.get("actual_tokens", 0)

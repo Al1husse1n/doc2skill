@@ -520,12 +520,15 @@ async def test_build_sse_truncated(monkeypatch: pytest.MonkeyPatch):
         for i in range(100)
     ]
 
+    captured: dict[str, int] = {}
+
     async def fake_load_url(url: str, max_pages: int = 100):
         return huge_docs
 
     def fake_count_tokens(self, prompt: str) -> int:
-        # Realistic count for budget_guard
-        return 100 if "Documentation snippets" in prompt else 200_000
+        if "Documentation snippets" in prompt:
+            return 100
+        return prompt.count("=== DOCUMENT:") * 2000
 
     def fake_synthesize(self, documents, max_tokens: int = 1000) -> FrontmatterResult:
         return FrontmatterResult(
@@ -538,8 +541,7 @@ async def test_build_sse_truncated(monkeypatch: pytest.MonkeyPatch):
     async def fake_condense(
         documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
     ):
-        dropped = [d.path for d in documents[45:]]
-        kept = [d.path for d in documents[:45]]
+        captured["n_docs"] = len(documents)
         return CondensedResult(
             body=(
                 "## API surface\n`Client()`\n\n"
@@ -547,11 +549,11 @@ async def test_build_sse_truncated(monkeypatch: pytest.MonkeyPatch):
                 "## Gotchas\nTruncation applied.\n\n"
                 "## Reference\ncore"
             ),
-            sources=kept,
-            input_tokens=180_000,
+            sources=[d.path for d in documents],
+            input_tokens=len(documents) * 2000,
             output_tokens=1_500,
-            dropped_documents=dropped,
-            truncated=True,
+            dropped_documents=[],
+            truncated=False,
         )
 
     monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
@@ -575,6 +577,15 @@ async def test_build_sse_truncated(monkeypatch: pytest.MonkeyPatch):
         )
 
     assert resp.status_code == 200
+    raw_sse_bytes = resp.content
+    print(f"\n[test_build_sse_truncated] n_docs={captured.get('n_docs')}")
+    print(raw_sse_bytes.decode("utf-8"))
+
+    assert captured["n_docs"] == 49
+    assert raw_sse_bytes.index(b"event: budget_pre") > raw_sse_bytes.index(
+        b"event: truncate_warning"
+    )
+
     parsed = _parse_sse(resp.text)
     names = [name for name, _ in parsed]
     assert "truncate_warning" in names
@@ -583,9 +594,10 @@ async def test_build_sse_truncated(monkeypatch: pytest.MonkeyPatch):
 
     events_map = dict(parsed)
     assert events_map["truncate_warning"]["reason"] == "context_limit"
-    assert events_map["truncate_warning"]["dropped_count"] > 0
+    assert events_map["truncate_warning"]["dropped_count"] == 51
+    assert events_map["budget_pre"]["estimated_input_tokens"] == 49 * 2000 + 100
     assert events_map["complete"]["truncated"] is True
-    assert len(events_map["complete"]["dropped_documents"]) > 0
+    assert len(events_map["complete"]["dropped_documents"]) == 51
 
 
 @pytest.mark.asyncio
