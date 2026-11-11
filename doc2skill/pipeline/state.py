@@ -34,6 +34,8 @@ class PipelineState(TypedDict, total=False):
     no_condense: bool
     model: str
     llm_provider: Any
+    validation_report: dict | None
+    strict: bool
 
 
 def create_initial_state(
@@ -48,6 +50,7 @@ def create_initial_state(
     max_output_tokens: int = 15_000,
     max_context_tokens: int = 500_000,
     no_condense: bool = False,
+    strict: bool = False,
 ) -> PipelineState:
     """Helper to initialize a fresh PipelineState dictionary."""
     selected_model = model or os.getenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
@@ -80,4 +83,6 @@ def create_initial_state(
         "no_condense": no_condense,
         "model": selected_model,
         "llm_provider": llm_provider,
+        "validation_report": None,
+        "strict": strict,
     }

@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import inspect
 import os
+from dataclasses import asdict
 from typing import Literal
 
 from google.genai import errors as genai_errors
@@ -23,6 +24,7 @@ from doc2skill.emit.skill import (
 from doc2skill.ingest.markdown import load_markdown_directory
 from doc2skill.llm.gemini import DEFAULT_MODEL, GeminiProvider
 from doc2skill.pipeline.state import PipelineState
+from doc2skill.validate import extract_identifiers, verify_identifiers
 
 
 def _run_async(coro):
@@ -279,6 +281,41 @@ def budget_record_node(state: PipelineState) -> dict:
     }
 
 
+def validate_node(state: PipelineState) -> dict:
+    """Extract condensed skill identifiers and verify them against the source corpus."""
+    if (
+        state.get("no_llm")
+        or state.get("skip_llm")
+        or state.get("no_condense")
+        or state.get("errors")
+        or not state.get("distilled")
+    ):
+        return {"validation_report": None}
+
+    ids = extract_identifiers(state["distilled"])
+    corpus = "\n\n".join(doc.content for doc in state.get("documents", []))
+    report = verify_identifiers(ids, corpus)
+    report_dict = asdict(report)
+    report_dict["precision"] = report.precision
+
+    if state.get("strict") and report.unverified:
+        errors = list(state.get("errors", []))
+        errors.append(
+            f"Strict mode: {len(report.unverified)} unverified identifiers "
+            f"in condensed skill (first 5: "
+            f"{[i.text for i in report.unverified[:5]]})"
+        )
+        return {"validation_report": report_dict, "errors": errors}
+    return {"validation_report": report_dict}
+
+
+def should_emit(state: PipelineState) -> Literal["emit", "skip"]:
+    """Skip SKILL.md emission when strict validation failed on unverified identifiers."""
+    if any("Strict mode:" in err for err in state.get("errors", [])):
+        return "skip"
+    return "emit"
+
+
 def emit_skill_node(state: PipelineState) -> dict:
     """Render and write SKILL.md output using condensed body, sources, and frontmatter."""
     source_path = state.get("source_path", "")
@@ -311,7 +348,7 @@ def emit_skill_node(state: PipelineState) -> dict:
 def build_pipeline_graph():
     """Build and compile the LangGraph pipeline:
 
-    load_documents -> truncate -> budget_guard -> [distill ->] budget_record -> emit_skill
+    load_documents -> truncate -> budget_guard -> [distill -> validate ->] budget_record -> [emit_skill]
     """
     workflow = StateGraph(PipelineState)
 
@@ -319,6 +356,7 @@ def build_pipeline_graph():
     workflow.add_node("truncate", truncate_node)
     workflow.add_node("budget_guard", budget_guard_node)
     workflow.add_node("distill", distill_node)
+    workflow.add_node("validate", validate_node)
     workflow.add_node("budget_record", budget_record_node)
     workflow.add_node("emit_skill", emit_skill_node)
 
@@ -333,8 +371,16 @@ def build_pipeline_graph():
             "skip": "budget_record",
         },
     )
-    workflow.add_edge("distill", "budget_record")
-    workflow.add_edge("budget_record", "emit_skill")
+    workflow.add_edge("distill", "validate")
+    workflow.add_edge("validate", "budget_record")
+    workflow.add_conditional_edges(
+        "budget_record",
+        should_emit,
+        {
+            "emit": "emit_skill",
+            "skip": END,
+        },
+    )
     workflow.add_edge("emit_skill", END)
 
     return workflow.compile()
