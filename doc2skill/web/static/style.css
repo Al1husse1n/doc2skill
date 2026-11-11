@@ -141,13 +141,13 @@ header h1,
 .brand-wordmark {
   margin: 0;
   font-family: 'Fraunces', Georgia, serif;
-  font-size: 2.85rem;
+  font-size: 2.9rem;
   font-weight: 600;
-  letter-spacing: -0.035em;
+  letter-spacing: -0.03em;
   line-height: 1.05;
   display: inline-flex;
-  align-items: center;
-  gap: 0.14em;
+  align-items: baseline;
+  gap: 0;
 }
 
 .brand-doc {
@@ -158,18 +158,19 @@ header h1,
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  align-self: flex-start;
   font-family: 'JetBrains Mono', var(--font-mono);
-  font-size: 1.38rem;
+  font-size: 0.98rem;
   font-weight: 600;
   line-height: 1;
-  padding: 0.28em 0.44em;
-  border-radius: 10px;
+  padding: 0.22em 0.42em;
+  margin: 0.08em 0.22em 0 0.08em;
+  border-radius: 7px;
   background: linear-gradient(135deg, #5A6B5C 0%, #4A5A4C 100%);
   color: #FFFFFF;
   border: 1px solid transparent;
-  box-shadow: 0 3px 10px rgba(74, 90, 76, 0.24),
+  box-shadow: 0 2px 8px rgba(74, 90, 76, 0.24),
     0 0 0 1px rgba(74, 90, 76, 0.28);
-  margin-bottom: 0.06em;
 }
 
 .brand-skill {
@@ -887,7 +888,7 @@ pre {
   }
 
   .brand-num {
-    font-size: 1.1rem;
+    font-size: 0.8rem;
   }
 
   .brand-pill {
