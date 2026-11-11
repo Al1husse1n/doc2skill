@@ -137,20 +137,44 @@ h3 {
   color: var(--color-text-main);
 }
 
-header h1 {
+header h1,
+.brand-wordmark {
   margin: 0;
-  font-size: 2.5rem;
+  font-family: 'Fraunces', Georgia, serif;
+  font-size: 2.85rem;
   font-weight: 600;
-  letter-spacing: -0.04em;
-  line-height: 1.1;
+  letter-spacing: -0.035em;
+  line-height: 1.05;
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
+  gap: 0.14em;
+}
+
+.brand-doc {
+  color: var(--color-text-main);
 }
 
 .brand-num {
-  color: var(--color-primary-hover);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'JetBrains Mono', var(--font-mono);
+  font-size: 1.38rem;
   font-weight: 600;
-  margin: 0 0.04em;
+  line-height: 1;
+  padding: 0.28em 0.44em;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #5A6B5C 0%, #4A5A4C 100%);
+  color: #FFFFFF;
+  border: 1px solid transparent;
+  box-shadow: 0 3px 10px rgba(74, 90, 76, 0.24),
+    0 0 0 1px rgba(74, 90, 76, 0.28);
+  margin-bottom: 0.06em;
+}
+
+.brand-skill {
+  font-style: italic;
+  color: var(--color-primary-ink);
 }
 
 .hero-desc {
@@ -857,8 +881,13 @@ pre {
     padding: 2rem 1rem 3rem;
   }
 
-  header h1 {
-    font-size: 2rem;
+  header h1,
+  .brand-wordmark {
+    font-size: 2.25rem;
+  }
+
+  .brand-num {
+    font-size: 1.1rem;
   }
 
   .brand-pill {
