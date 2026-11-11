@@ -55,7 +55,8 @@ Run `doc2skill build --help` or `doc2skill serve --help` for flags (`--max-token
 
 ### What it doesn't do (yet)
 - **Hierarchical condensation**: corpora larger than `--max-context-tokens` are truncated, not map-reduced across multiple LLM passes.
-- **Hallucination validation**: condensation includes refusal/stub checks and conservative prompting, not automated fact-checking against source APIs.
+- **Runtime API fact-checking**: identifier validation checks extracted tokens against source docs (with `--strict` fail mode), not live execution or upstream source introspection.
+- **Distinguish inference from hallucination**: if the LLM infers a correct-but-not-in-source identifier (e.g., a `DEFAULT_TIMEOUT` constant that's real in the API but not spelled out in the docs), it's classified as `source_divergent`, not `unverified`. `--strict` only fails on `unverified`.
 - **Auth or rate limiting**: `doc2skill serve` is a local developer UI without authentication, rate limiting, persistence, or multi-user isolation.
 
 ## Tests
