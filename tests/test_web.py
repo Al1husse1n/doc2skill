@@ -963,6 +963,61 @@ async def test_build_rate_limit_429_on_sixth_request(
         assert resp_other_ip.status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_build_rate_limit_by_api_key_ignores_ip_spoofing(
+    monkeypatch: pytest.MonkeyPatch, fake_docs: list[Document]
+):
+    """When X-API-Key is present, rate limits key on hashed API key so X-Forwarded-For cannot bypass."""
+    monkeypatch.setenv("DOC2SKILL_API_KEY", "prod-secret-token")
+
+    async def fake_load_url(url: str, max_pages: int = 100, follow_sitemap: bool = True):
+        return fake_docs
+
+    monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
+
+    payload = {
+        "source": "https://ratelimit-key.example.com/docs",
+        "source_type": "url",
+        "max_pages": 5,
+        "max_tokens": 50_000,
+        "no_cache": True,
+        "no_llm": True,
+    }
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for i in range(5):
+            resp = await client.post(
+                "/api/build",
+                headers={
+                    "X-API-Key": "prod-secret-token",
+                    "X-Forwarded-For": f"198.51.100.{i + 1}",
+                },
+                json=payload,
+            )
+            assert resp.status_code == 200
+
+        # 6th call with yet another spoofed IP still hits the API-key bucket -> 429
+        resp_sixth = await client.post(
+            "/api/build",
+            headers={
+                "X-API-Key": "prod-secret-token",
+                "X-Forwarded-For": "198.51.100.99",
+            },
+            json=payload,
+        )
+        assert resp_sixth.status_code == 429
+
+        # Bucket keys stored in memory are hashed ("key:<16 hex>"), never raw keys
+        stored_keys = list(app.state.rate_limiter._hits.keys())
+        assert len(stored_keys) == 1
+        assert stored_keys[0].startswith("key:")
+        assert len(stored_keys[0]) == 4 + 16
+        assert "prod-secret-token" not in stored_keys[0]
+
+
+
 
 
 

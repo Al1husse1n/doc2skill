@@ -68,6 +68,7 @@ def _validate_build_request(payload: BuildRequest) -> str:
     return source
 
 
+import hashlib
 import os as _os
 import secrets
 import time
@@ -75,7 +76,7 @@ from collections import defaultdict, deque
 
 
 class InMemoryRateLimiter:
-    """Simple per-IP sliding-window rate limiter scoped to an app instance."""
+    """Sliding-window rate limiter scoped to an app instance (keyed by API key hash or IP)."""
 
     def __init__(self, max_requests: int = 5, window_seconds: float = 60.0) -> None:
         self.max_requests = max_requests
@@ -96,6 +97,24 @@ class InMemoryRateLimiter:
         return True, 0
 
 
+def _client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip() or "unknown"
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _rate_limit_key(request: Request) -> str:
+    """Key rate limits on hashed X-API-Key when present, otherwise client IP."""
+    api_key = request.headers.get("x-api-key", "").strip()
+    if api_key:
+        digest = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+        return f"key:{digest}"
+    return f"ip:{_client_ip(request)}"
+
+
 def create_app() -> FastAPI:
     """Create and configure the local doc2skill FastAPI application."""
     app = FastAPI(
@@ -108,17 +127,9 @@ def create_app() -> FastAPI:
     rate_limiter = InMemoryRateLimiter(max_requests=5, window_seconds=60.0)
     app.state.rate_limiter = rate_limiter
 
-    def _client_ip(request: Request) -> str:
-        forwarded_for = request.headers.get("x-forwarded-for", "").strip()
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip() or "unknown"
-        if request.client and request.client.host:
-            return request.client.host
-        return "unknown"
-
     @app.middleware("http")
     async def auth_and_rate_limit_middleware(request: Request, call_next):
-        """Enforce optional DOC2SKILL_API_KEY and per-IP rate limiting on POST /api/build."""
+        """Enforce optional DOC2SKILL_API_KEY and per-key/IP rate limiting on POST /api/build."""
         if request.method == "POST" and request.url.path == "/api/build":
             expected_key = _os.getenv("DOC2SKILL_API_KEY", "").strip()
             if expected_key:
@@ -129,7 +140,7 @@ def create_app() -> FastAPI:
                         content={"detail": "Invalid or missing API key."},
                     )
 
-            allowed, retry_after = rate_limiter.check(_client_ip(request))
+            allowed, retry_after = rate_limiter.check(_rate_limit_key(request))
             if not allowed:
                 return JSONResponse(
                     status_code=429,
