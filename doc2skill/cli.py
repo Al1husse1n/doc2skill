@@ -282,12 +282,23 @@ def main(
     if validation_report is not None:
         v_count = len(validation_report.get("verified", []))
         k_count = len(validation_report.get("known_external", []))
+        sd_count = len(validation_report.get("source_divergent", []))
         u_count = len(validation_report.get("unverified", []))
-        total_ids = v_count + k_count + u_count
+        total_ids = v_count + k_count + sd_count + u_count
         precision = float(validation_report.get("precision", 1.0))
+        inference_rate = float(validation_report.get("inference_rate", 0.0))
         typer.echo(
-            f"  Validation: {v_count} verified, {k_count} known-external, {u_count} unverified ({precision:.1%} precision)"
+            f"  Validation: {v_count} verified, {k_count} known-external, "
+            f"{sd_count} source-divergent ({inference_rate:.1%}), "
+            f"{u_count} unverified ({precision:.1%} precision)"
         )
+        if sd_count > 0:
+            typer.secho(
+                f"Warning: {sd_count} identifiers appear to be correct inferences from API signatures "
+                "but are not in source docs. Review if you need source-faithful output.",
+                fg=typer.colors.BLUE,
+                err=True,
+            )
         if u_count > 0:
             if total_ids > 0 and u_count > 0.2 * total_ids:
                 typer.secho(

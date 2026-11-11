@@ -297,6 +297,7 @@ def validate_node(state: PipelineState) -> dict:
     report = verify_identifiers(ids, corpus)
     report_dict = asdict(report)
     report_dict["precision"] = report.precision
+    report_dict["inference_rate"] = report.inference_rate
 
     if state.get("strict") and report.unverified:
         errors = list(state.get("errors", []))

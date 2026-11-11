@@ -212,6 +212,7 @@ def _map_node_update(
 
         verified = list(report.get("verified") or [])
         known_external = list(report.get("known_external") or [])
+        source_divergent = list(report.get("source_divergent") or [])
         unverified = list(report.get("unverified") or [])
         denom = len(verified) + len(unverified)
         raw_precision = (
@@ -221,11 +222,29 @@ def _map_node_update(
         )
         precision = round(raw_precision, 3)
 
+        inf_denom = len(verified) + len(source_divergent) + len(unverified)
+        raw_inf_rate = (
+            float(report["inference_rate"])
+            if "inference_rate" in report
+            else (len(source_divergent) / inf_denom if inf_denom else 0.0)
+        )
+        inference_rate = round(raw_inf_rate, 3)
+
         run_meta["validation"] = {
             "verified_count": len(verified),
             "known_external_count": len(known_external),
+            "source_divergent_count": len(source_divergent),
             "unverified_count": len(unverified),
             "precision": precision,
+            "inference_rate": inference_rate,
+            "source_divergent": [
+                {
+                    "text": str(item.get("text", "")),
+                    "kind": str(item.get("kind", "")),
+                    "context": str(item.get("context", "")),
+                }
+                for item in source_divergent
+            ],
             "unverified": [
                 {
                     "text": str(item.get("text", "")),
@@ -242,8 +261,17 @@ def _map_node_update(
                 {
                     "verified_count": len(verified),
                     "known_external_count": len(known_external),
+                    "source_divergent_count": len(source_divergent),
                     "unverified_count": len(unverified),
                     "precision": precision,
+                    "inference_rate": inference_rate,
+                    "source_divergent_preview": [
+                        {
+                            "text": str(item.get("text", "")),
+                            "kind": str(item.get("kind", "")),
+                        }
+                        for item in source_divergent[:5]
+                    ],
                     "unverified_preview": [
                         str(item.get("text", "")) for item in unverified[:5]
                     ],

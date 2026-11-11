@@ -707,7 +707,7 @@ async def test_build_sse_validation(monkeypatch: pytest.MonkeyPatch):
     ):
         return CondensedResult(
             body=(
-                "## API surface\n`httpx.Client` and `httpx.FictionalClient`\n\n"
+                "## API surface\n`httpx.Client(timeout=DEFAULT_TIMEOUT)` and `httpx.FictionalClient`\n\n"
                 "## Common workflows\n1. Use `httpx.Client`.\n\n"
                 "## Gotchas\nAvoid `httpx.FictionalClient`.\n\n"
                 "## Reference\nclient"
@@ -747,15 +747,24 @@ async def test_build_sse_validation(monkeypatch: pytest.MonkeyPatch):
     val_event = events_map["validation"]
     assert val_event["verified_count"] == 1
     assert val_event["known_external_count"] == 0
+    assert val_event["source_divergent_count"] == 1
     assert val_event["unverified_count"] == 1
     assert val_event["precision"] == 0.5
+    assert val_event["inference_rate"] == 0.333
+    assert val_event["source_divergent_preview"] == [
+        {"text": "DEFAULT_TIMEOUT", "kind": "env_var"}
+    ]
     assert val_event["unverified_preview"] == ["httpx.FictionalClient"]
 
     complete_val = events_map["complete"]["validation"]
     assert complete_val["verified_count"] == 1
     assert complete_val["known_external_count"] == 0
+    assert complete_val["source_divergent_count"] == 1
     assert complete_val["unverified_count"] == 1
     assert complete_val["precision"] == 0.5
+    assert complete_val["inference_rate"] == 0.333
+    assert len(complete_val["source_divergent"]) == 1
+    assert complete_val["source_divergent"][0]["text"] == "DEFAULT_TIMEOUT"
     assert len(complete_val["unverified"]) == 1
     assert complete_val["unverified"][0]["text"] == "httpx.FictionalClient"
     assert complete_val["unverified"][0]["kind"] == "class"

@@ -55,6 +55,7 @@
       </ul>
       <div id="metrics" class="metrics hidden"></div>
       <div id="warning-badge" class="warning-badge hidden"></div>
+      <div id="divergent-badge" class="info-badge hidden"></div>
       <div id="validation-badge" class="warning-badge hidden"></div>
       <div id="error-banner" class="error-banner hidden"></div>
     </section>
@@ -77,6 +78,7 @@
     const progressArea = document.getElementById("progress-area");
     const metricsEl = document.getElementById("metrics");
     const warningBadge = document.getElementById("warning-badge");
+    const divergentBadge = document.getElementById("divergent-badge");
     const validationBadge = document.getElementById("validation-badge");
     const errorBanner = document.getElementById("error-banner");
     const resultArea = document.getElementById("result-area");
@@ -132,11 +134,11 @@
       warningBadge.classList.remove("hidden");
     }
 
-    function showValidationWarning(count, items) {
-      validationBadge.innerHTML = "";
+    function renderValidationDetails(badgeEl, summaryText, items) {
+      badgeEl.innerHTML = "";
       const details = document.createElement("details");
       const summary = document.createElement("summary");
-      summary.textContent = `${count} identifiers not found in source docs — see details`;
+      summary.textContent = summaryText;
       details.appendChild(summary);
 
       const list = document.createElement("ul");
@@ -159,8 +161,24 @@
         list.appendChild(li);
       }
       details.appendChild(list);
-      validationBadge.appendChild(details);
-      validationBadge.classList.remove("hidden");
+      badgeEl.appendChild(details);
+      badgeEl.classList.remove("hidden");
+    }
+
+    function showValidationWarning(count, items) {
+      renderValidationDetails(
+        validationBadge,
+        `${count} identifiers not found in source docs — see details`,
+        items
+      );
+    }
+
+    function showDivergentInfo(count, items) {
+      renderValidationDetails(
+        divergentBadge,
+        `${count} inferred API identifiers not in source docs — see details`,
+        items
+      );
     }
 
     function resetUI() {
@@ -170,6 +188,8 @@
       metricsEl.classList.add("hidden");
       warningBadge.textContent = "";
       warningBadge.classList.add("hidden");
+      divergentBadge.innerHTML = "";
+      divergentBadge.classList.add("hidden");
       validationBadge.innerHTML = "";
       validationBadge.classList.add("hidden");
       errorBanner.textContent = "";
@@ -226,11 +246,15 @@
       } else if (eventName === "validation") {
         const verifiedCount = Number(data.verified_count || 0);
         const externalCount = Number(data.known_external_count || 0);
+        const divergentCount = Number(data.source_divergent_count || 0);
         const unverifiedCount = Number(data.unverified_count || 0);
         const pct = Math.round(Number(data.precision ?? 1) * 100);
         addMetric(
-          `Validation: ${verifiedCount} verified, ${externalCount} known-external, ${unverifiedCount} unverified (${pct}% precision)`
+          `Validation: ${verifiedCount} verified, ${externalCount} known-external, ${divergentCount} inferred, ${unverifiedCount} unverified (${pct}% precision)`
         );
+        if (divergentCount > 0) {
+          showDivergentInfo(divergentCount, data.source_divergent_preview || []);
+        }
         if (unverifiedCount > 0) {
           showValidationWarning(unverifiedCount, data.unverified_preview || []);
         }
@@ -245,6 +269,12 @@
         }
         if (data.truncated && Array.isArray(data.dropped_documents) && data.dropped_documents.length > 0) {
           showWarning(`${data.dropped_documents.length} docs dropped to fit context limit.`);
+        }
+        if (data.validation && Number(data.validation.source_divergent_count || 0) > 0) {
+          showDivergentInfo(
+            Number(data.validation.source_divergent_count),
+            data.validation.source_divergent || []
+          );
         }
         if (data.validation && Number(data.validation.unverified_count || 0) > 0) {
           showValidationWarning(

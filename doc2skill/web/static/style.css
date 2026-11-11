@@ -241,6 +241,17 @@ button:disabled {
   }
 }
 
+.info-badge {
+  margin-top: 0.75rem;
+  padding: 0.55rem 0.85rem;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: rgba(9, 105, 218, 0.12);
+  color: var(--accent);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
 .actions {
   display: flex;
   gap: 0.65rem;

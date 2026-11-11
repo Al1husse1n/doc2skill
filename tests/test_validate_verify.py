@@ -92,3 +92,33 @@ def test_bare_class_backtick_heading_and_full_vs_unverified():
     assert verified_contexts == {"httpx.Headers": "bare", "httpx.Client": "full"}
     assert [item.text for item in report.unverified] == ["httpx.FakeClient"]
 
+
+def test_source_divergent_defaults_and_signature_bounds():
+    """DEFAULT_* constants and (max|min)_*/pool_limits/max_redirects in signatures go to source_divergent."""
+    skill_md = """
+```python
+httpx.Client(
+    timeout=DEFAULT_TIMEOUT,
+    pool_limits: Limits = DEFAULT_LIMITS,
+    max_redirects: int = DEFAULT_MAX_REDIRECTS,
+)
+```
+In prose, `min_retry_count` without signature syntax is unverified.
+"""
+    source = "Use `httpx.Client` for requests."
+    report = verify_identifiers(extract_identifiers(skill_md), source)
+
+    assert [i.text for i in report.verified] == ["httpx.Client"]
+    assert {i.text for i in report.source_divergent} == {
+        "DEFAULT_TIMEOUT",
+        "pool_limits",
+        "DEFAULT_LIMITS",
+        "max_redirects",
+        "DEFAULT_MAX_REDIRECTS",
+    }
+    assert [i.text for i in report.unverified] == ["min_retry_count"]
+    # precision excludes source_divergent (1 / (1 + 1) = 0.5)
+    assert report.precision == 0.5
+    # inference_rate = 5 / (1 + 5 + 1) = 5/7
+    assert abs(report.inference_rate - (5 / 7)) < 1e-9
+

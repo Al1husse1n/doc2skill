@@ -142,3 +142,42 @@ def test_pipeline_validate_strict_passes_when_all_verified(tmp_path: Path):
     assert result["validation_report"]["unverified"] == []
     assert result["validation_report"]["precision"] == 1.0
 
+
+def test_pipeline_validate_strict_allows_source_divergent(tmp_path: Path):
+    """Strict mode succeeds and emits SKILL.md when only source_divergent (0 unverified) exists."""
+    docs = [
+        Document(
+            path="client.md",
+            content="# Client\nUse `httpx.Client` for synchronous requests.",
+            title="Client",
+        )
+    ]
+    body = (
+        "## API surface\n`httpx.Client(max_redirects: int = DEFAULT_MAX_REDIRECTS)`\n\n"
+        "## Common workflows\n1. Use `httpx.Client(max_redirects=10)`.\n\n"
+        "## Gotchas\nRespect redirect defaults.\n\n"
+        "## Reference\nclient.md"
+    )
+
+    graph = build_pipeline_graph()
+    state = create_initial_state(
+        source_path="docs",
+        documents=docs,
+        output_dir=str(tmp_path / "divergent_strict_out"),
+        llm_provider=_mock_provider(body),
+        strict=True,
+    )
+    result = graph.invoke(state)
+
+    assert not result.get("errors")
+    assert result.get("output_path") is not None
+    assert Path(result["output_path"]).exists()
+    report = result["validation_report"]
+    assert report["unverified"] == []
+    assert {i["text"] for i in report["source_divergent"]} == {
+        "max_redirects",
+        "DEFAULT_MAX_REDIRECTS",
+    }
+    assert report["precision"] == 1.0
+    assert report["inference_rate"] > 0.0
+
