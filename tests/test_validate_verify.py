@@ -1,4 +1,4 @@
-from doc2skill.validate.extract import extract_identifiers
+from doc2skill.validate.extract import Identifier, extract_identifiers
 from doc2skill.validate.verify import ValidationReport, verify_identifiers
 
 
@@ -65,4 +65,30 @@ def test_verify_empty_source_marks_non_allowlisted_unverified():
         "GEMINI_API_KEY",
     }
     assert report.precision == 0.0
+
+
+def test_bare_class_verification():
+    """Dotted classes documented under bare headings or class defs verify with context='bare'."""
+    ids = [Identifier("httpx.URL", "class", "")]
+    corpus = "## URL\n\nclass URL(url: str, **kwargs): ..."
+    report = verify_identifiers(ids, corpus)
+    assert len(report.verified) == 1
+    assert report.verified[0].context == "bare"
+
+
+def test_bare_class_backtick_heading_and_full_vs_unverified():
+    """Backtick markdown headings like ## `Headers` verify bare; prose-only bare words stay unverified."""
+    ids = [
+        Identifier("httpx.Headers", "class", ""),
+        Identifier("httpx.Client", "class", ""),
+        Identifier("httpx.FakeClient", "class", ""),
+    ]
+    corpus = (
+        "## `Headers`\n\nHeader container.\n\n"
+        "Use `httpx.Client` for requests; FakeClient appears only as a plain prose word."
+    )
+    report = verify_identifiers(ids, corpus)
+    verified_contexts = {item.text: item.context for item in report.verified}
+    assert verified_contexts == {"httpx.Headers": "bare", "httpx.Client": "full"}
+    assert [item.text for item in report.unverified] == ["httpx.FakeClient"]
 
