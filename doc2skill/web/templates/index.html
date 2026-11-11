@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>doc2skill</title>
+  <title>doc2skill — Documentation to Agent Skill</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
@@ -12,12 +12,34 @@
 <body>
   <div class="container">
     <header>
-      <h1>doc2skill</h1>
-      <p class="tagline">Documentation → agent skill</p>
+      <div class="hero-brand">
+        <span class="brand-pill">
+          <span class="brand-dot" aria-hidden="true"></span>
+          <span>Documentation to Agent Skill</span>
+        </span>
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>
+              <path d="M14 3v5h5"/>
+              <path d="M9.5 13.5 11.5 15.5 15 11.5"/>
+            </svg>
+          </span>
+          <h1><span>doc</span><span class="brand-num">2</span><span>skill</span></h1>
+        </div>
+      </div>
+      <p class="hero-desc">
+        Convert any docs URL into a compact, source-verified <code>SKILL.md</code> reference built for AI coding agents.
+      </p>
     </header>
 
-    <section class="card">
-      <p class="card-kicker">01. Source &amp; Budget</p>
+    <section class="card card-form">
+      <div class="card-header">
+        <p class="card-kicker">
+          <span class="kicker-num">01</span>
+          <span>Source &amp; Budget</span>
+        </p>
+      </div>
       <form id="build-form">
         <div class="field">
           <label for="source-url">Documentation URL</label>
@@ -51,13 +73,29 @@
 
         <button id="build-btn" type="submit" class="primary">
           <span>Build skill</span>
-          <span class="btn-arrow" aria-hidden="true">→</span>
+          <span class="btn-arrow" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M5 12h14"/>
+              <path d="m13 6 6 6-6 6"/>
+            </svg>
+          </span>
         </button>
       </form>
     </section>
 
-    <section id="progress-area" class="card hidden" aria-live="polite">
-      <p class="card-kicker">02. Pipeline Progress</p>
+    <section id="progress-area" class="card card-panel hidden" aria-live="polite">
+      <div class="card-header">
+        <p class="card-kicker">
+          <span class="kicker-num kicker-num-sand">02</span>
+          <span>Pipeline Progress</span>
+        </p>
+      </div>
+      <div class="progress-bar-wrap" aria-hidden="true">
+        <div class="progress-track">
+          <div id="progress-fill" class="progress-fill"></div>
+        </div>
+        <span id="progress-pct" class="progress-pct">0%</span>
+      </div>
       <ul class="timeline">
         <li id="step-ingest"><span class="step-icon">○</span><span>Ingesting</span></li>
         <li id="step-budget"><span class="step-icon">○</span><span>Budget check</span></li>
@@ -71,11 +109,34 @@
       <div id="error-banner" class="error-banner hidden"></div>
     </section>
 
-    <section id="result-area" class="card hidden">
-      <p class="card-kicker">03. Generated Skill</p>
+    <section id="result-area" class="card card-panel hidden">
+      <div class="card-header">
+        <p class="card-kicker">
+          <span class="kicker-num">03</span>
+          <span>Generated Skill</span>
+        </p>
+      </div>
       <div class="actions">
-        <button id="download-btn" type="button" class="secondary">Download SKILL.md</button>
-        <button id="copy-btn" type="button" class="secondary">Copy to clipboard</button>
+        <button id="download-btn" type="button" class="secondary">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <path d="m7 10 5 5 5-5"/>
+            <path d="M12 15V3"/>
+          </svg>
+          <span>Download SKILL.md</span>
+        </button>
+        <button id="copy-btn" type="button" class="secondary">
+          <span class="icon-stack" aria-hidden="true">
+            <svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2"/>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+            </svg>
+            <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 6 9 17l-5-5"/>
+            </svg>
+          </span>
+          <span id="copy-label">Copy to clipboard</span>
+        </button>
       </div>
       <details open>
         <summary>Generated SKILL.md</summary>
@@ -88,6 +149,8 @@
     const form = document.getElementById("build-form");
     const buildBtn = document.getElementById("build-btn");
     const progressArea = document.getElementById("progress-area");
+    const progressFill = document.getElementById("progress-fill");
+    const progressPct = document.getElementById("progress-pct");
     const metricsEl = document.getElementById("metrics");
     const warningBadge = document.getElementById("warning-badge");
     const divergentBadge = document.getElementById("divergent-badge");
@@ -97,6 +160,7 @@
     const skillPreview = document.getElementById("skill-preview");
     const downloadBtn = document.getElementById("download-btn");
     const copyBtn = document.getElementById("copy-btn");
+    const copyLabel = document.getElementById("copy-label");
 
     const steps = {
       ingest: document.getElementById("step-ingest"),
@@ -107,6 +171,14 @@
 
     let currentSkillMd = "";
     let currentSkillName = "SKILL";
+    let copyTimer = null;
+
+    function setProgress(pct, isError = false) {
+      const clamped = Math.max(0, Math.min(100, pct));
+      progressFill.style.width = `${clamped}%`;
+      progressFill.classList.toggle("is-error", isError);
+      progressPct.textContent = `${clamped}%`;
+    }
 
     function setStepState(key, state) {
       const el = steps[key];
@@ -136,6 +208,7 @@
     function showError(message, stage) {
       errorBanner.textContent = message;
       errorBanner.classList.remove("hidden");
+      setProgress(parseInt(progressPct.textContent, 10) || 25, true);
       if (stage && steps[stage]) {
         setStepState(stage, "error");
       }
@@ -206,7 +279,10 @@
       validationBadge.classList.add("hidden");
       errorBanner.textContent = "";
       errorBanner.classList.add("hidden");
+      copyBtn.classList.remove("is-copied");
+      copyLabel.textContent = "Copy to clipboard";
       currentSkillMd = "";
+      setProgress(8);
       Object.keys(steps).forEach((k) => setStepState(k, ""));
     }
 
@@ -220,33 +296,40 @@
 
       if (eventName === "start") {
         setStepState("ingest", "active");
+        setProgress(12);
       } else if (eventName === "ingest_progress") {
         if (data.status === "loading") {
           addMetric("Loading pages...");
+          setProgress(20);
         } else if (data.pages_total) {
           addMetric(`Fetched ${data.pages_fetched || 0} / ${data.pages_total} pages`);
         }
       } else if (eventName === "ingest_done") {
         setStepState("ingest", "done");
         setStepState("budget", "active");
+        setProgress(35);
         addMetric(`${data.documents} document(s) loaded`);
       } else if (eventName === "truncate_warning") {
         const count = Number(data.dropped_count || 0);
         showWarning(`${count} docs dropped to fit context limit.`);
       } else if (eventName === "budget_pre") {
         setStepState("budget", "done");
+        setProgress(52);
         const est = Number(data.estimated_input_tokens || 0).toLocaleString();
         addMetric(`${est} estimated input tokens (limit: ${Number(data.max_tokens || 0).toLocaleString()})`);
         if (document.getElementById("no-llm").checked) {
           setStepState("llm", "skipped");
           setStepState("render", "active");
+          setProgress(82);
         }
       } else if (eventName === "llm_call") {
         setStepState("llm", "active");
+        setProgress(65);
         addMetric(`Synthesizing & condensing (${data.model || "gemini"})...`);
       } else if (eventName === "llm_done") {
         setStepState("llm", "done");
         setStepState("render", "active");
+        setProgress(84);
         const inTok = Number(data.input_tokens || 0).toLocaleString();
         const outTok = Number(data.output_tokens || 0).toLocaleString();
         addMetric(`${inTok} input tokens, ${outTok} output tokens`);
@@ -256,6 +339,7 @@
         const secs = Array.isArray(data.sections) ? data.sections.join(", ") : "";
         addMetric(`Condensed corpus (${cIn} in → ${cOut} out): ${secs}`);
       } else if (eventName === "validation") {
+        setProgress(92);
         const verifiedCount = Number(data.verified_count || 0);
         const externalCount = Number(data.known_external_count || 0);
         const divergentCount = Number(data.source_divergent_count || 0);
@@ -295,6 +379,7 @@
           );
         }
         setStepState("render", "done");
+        setProgress(100);
         currentSkillMd = data.skill_md || "";
         currentSkillName = data.skill_name || "skill";
         skillPreview.textContent = currentSkillMd;
@@ -387,12 +472,15 @@
       if (!currentSkillMd) return;
       try {
         await navigator.clipboard.writeText(currentSkillMd);
-        const orig = copyBtn.textContent;
-        copyBtn.textContent = "Copied!";
-        setTimeout(() => { copyBtn.textContent = orig; }, 1500);
+        if (copyTimer) clearTimeout(copyTimer);
+        copyBtn.classList.add("is-copied");
+        copyLabel.textContent = "Copied!";
+        copyTimer = setTimeout(() => {
+          copyBtn.classList.remove("is-copied");
+          copyLabel.textContent = "Copy to clipboard";
+        }, 1500);
       } catch {}
     });
   </script>
 </body>
 </html>
-
