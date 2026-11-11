@@ -186,6 +186,79 @@ header h1,
   line-height: 1.55;
 }
 
+.hero-links {
+  display: flex;
+  justify-content: center;
+  margin-top: 1rem;
+}
+
+.repo-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 100%;
+  padding: 7px 13px 7px 11px;
+  border-radius: 9999px;
+  background: var(--color-surface);
+  color: var(--color-text-main);
+  text-decoration: none;
+  font-size: 0.84rem;
+  font-weight: 500;
+  line-height: 1.2;
+  border: 1px solid transparent;
+  box-shadow: 0 1px 2px rgba(26, 26, 26, 0.04),
+    0 0 0 1px rgba(201, 189, 175, 0.55);
+  transition-property: background-color, border-color, color, box-shadow;
+  transition-duration: 150ms;
+  transition-timing-function: ease-out;
+}
+
+.repo-link:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-color: var(--color-primary-hover);
+}
+
+@media (hover: hover) {
+  .repo-link:hover {
+    color: var(--color-primary-ink);
+    box-shadow: 0 2px 6px rgba(26, 26, 26, 0.05),
+      0 10px 24px rgba(0, 0, 0, 0.06),
+      0 0 0 1px rgba(107, 127, 110, 0.55);
+  }
+}
+
+.repo-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--color-text-main);
+}
+
+.repo-label {
+  font-weight: 600;
+}
+
+.repo-divider {
+  color: var(--color-sand);
+}
+
+.repo-handle {
+  font-family: 'JetBrains Mono', var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--color-text-muted-aa);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repo-external {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  color: var(--color-primary-ink);
+}
+
 /* Cards (border: 1px solid transparent keeps forced-colors edge when shadows drop) */
 .card {
   background: var(--color-surface);
@@ -822,6 +895,10 @@ pre {
     animation: calm-enter 300ms ease-out 100ms both;
   }
 
+  .hero-links {
+    animation: calm-enter 300ms ease-out 150ms both;
+  }
+
   .card-form {
     animation: calm-enter 300ms ease-out 200ms both;
   }
@@ -846,8 +923,15 @@ pre {
     transition-timing-function: ease-out;
   }
 
-  .btn-arrow {
+  .btn-arrow,
+  .repo-external {
     transition-property: transform;
+    transition-duration: 150ms;
+    transition-timing-function: ease-out;
+  }
+
+  .repo-link {
+    transition-property: background-color, border-color, color, box-shadow, transform;
     transition-duration: 150ms;
     transition-timing-function: ease-out;
   }
@@ -864,11 +948,20 @@ pre {
     button.secondary:hover:not(:disabled) {
       transform: scale(1.02);
     }
+
+    .repo-link:hover {
+      transform: scale(1.02);
+    }
+
+    .repo-link:hover .repo-external {
+      transform: translate(1.5px, -1.5px);
+    }
   }
 
   button.primary:not(:disabled):active,
   button.secondary:not(:disabled):active,
-  button:not(:disabled):active {
+  button:not(:disabled):active,
+  .repo-link:active {
     transform: scale(0.96);
     transition-duration: 150ms;
     transition-timing-function: ease-out;

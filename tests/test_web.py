@@ -77,6 +77,7 @@ async def test_index_serves_html():
     assert "text/html" in resp.headers.get("content-type", "")
     assert "<form" in resp.text
     assert "doc2skill" in resp.text
+    assert 'href="https://github.com/Al1husse1n/doc2skill"' in resp.text
 
 
 @pytest.mark.asyncio
