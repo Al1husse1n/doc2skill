@@ -4,6 +4,9 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>doc2skill</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -14,6 +17,7 @@
     </header>
 
     <section class="card">
+      <p class="card-kicker">01. Source &amp; Budget</p>
       <form id="build-form">
         <div class="field">
           <label for="source-url">Documentation URL</label>
@@ -37,16 +41,23 @@
           </div>
         </div>
 
-        <label class="checkbox-field">
-          <input id="no-llm" name="no_llm" type="checkbox">
-          <span>Skip LLM (offline mode)</span>
+        <label class="toggle-field" for="no-llm">
+          <input id="no-llm" name="no_llm" type="checkbox" class="toggle-input">
+          <span class="toggle-track" aria-hidden="true">
+            <span class="toggle-thumb"></span>
+          </span>
+          <span class="toggle-label">Skip LLM (offline mode)</span>
         </label>
 
-        <button id="build-btn" type="submit" class="primary">Build skill</button>
+        <button id="build-btn" type="submit" class="primary">
+          <span>Build skill</span>
+          <span class="btn-arrow" aria-hidden="true">→</span>
+        </button>
       </form>
     </section>
 
     <section id="progress-area" class="card hidden" aria-live="polite">
+      <p class="card-kicker">02. Pipeline Progress</p>
       <ul class="timeline">
         <li id="step-ingest"><span class="step-icon">○</span><span>Ingesting</span></li>
         <li id="step-budget"><span class="step-icon">○</span><span>Budget check</span></li>
@@ -61,9 +72,10 @@
     </section>
 
     <section id="result-area" class="card hidden">
+      <p class="card-kicker">03. Generated Skill</p>
       <div class="actions">
-        <button id="download-btn" type="button" class="primary">Download SKILL.md</button>
-        <button id="copy-btn" type="button">Copy to clipboard</button>
+        <button id="download-btn" type="button" class="secondary">Download SKILL.md</button>
+        <button id="copy-btn" type="button" class="secondary">Copy to clipboard</button>
       </div>
       <details open>
         <summary>Generated SKILL.md</summary>
