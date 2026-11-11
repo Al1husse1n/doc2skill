@@ -87,3 +87,101 @@ def test_extract_english_snake_case_is_allowlisted():
     matching = [item for item in extracted if item.text in ("use_case", "edge_case")]
     # Either excluded at extraction OR allowlisted as known_external
     assert all(is_known_external(item) for item in matching)
+
+
+def test_extract_code_lhs_assignment_skipped():
+    """Statement-level LHS assignment targets in code blocks are skipped, while multiline kwargs stay."""
+    markdown = """
+```python
+text_content = response.text
+json_response = response.json()
+client = httpx.Client(
+    follow_redirects=True,
+    base_url="https://api.example.com",
+)
+```
+"""
+    extracted = extract_identifiers(markdown)
+    texts = {item.text for item in extracted}
+    assert "text_content" not in texts
+    assert "json_response" not in texts
+    assert "follow_redirects" in texts
+    assert "base_url" in texts
+    assert "httpx.Client" in texts
+    assert "json" in texts
+
+
+def test_extract_code_string_literal_skipped():
+    """Tokens inside single, double, or triple-quoted strings in code blocks are skipped."""
+    markdown = '''
+```python
+# Don't let comments with apostrophes flip string state
+headers = {"Authorization": "Bearer my_secret_token"}
+auth = httpx.BasicAuth("user_name", 'example_secret_val')
+note = """
+multi_line_secret_val
+"""
+client = httpx.Client(follow_redirects=True)
+```
+'''
+    extracted = extract_identifiers(markdown)
+    texts = {item.text for item in extracted}
+    assert "my_secret_token" not in texts
+    assert "example_secret_val" not in texts
+    assert "multi_line_secret_val" not in texts
+    assert "follow_redirects" in texts
+
+
+def test_extract_code_def_class_definition_skipped():
+    """User-defined def/class names and class-body attribute annotations are skipped; base refs kept."""
+    markdown = """
+```python
+async def fetch_url(client: httpx.AsyncClient, url: str):
+    return await client.get(url)
+
+class BearerAuth(httpx.Auth):
+    custom_handler: CustomTimeout
+```
+"""
+    extracted = extract_identifiers(markdown)
+    pairs = [(item.text, item.kind) for item in extracted]
+    texts = {item.text for item in extracted}
+    assert "fetch_url" not in texts
+    assert "BearerAuth" not in texts
+    assert "CustomTimeout" not in texts
+    assert ("httpx.AsyncClient", "class") in pairs
+    assert ("httpx.Auth", "class") in pairs
+    assert ("get", "method") in pairs
+
+
+def test_extract_code_dict_key_skipped():
+    """Dict literal keys inside {...} are skipped while keyword arguments in calls are extracted."""
+    markdown = """
+```python
+payload = {
+    "item_id": 123,
+    "example_item": "abc",
+    unquoted_key: True,
+}
+```
+"""
+    extracted = extract_identifiers(markdown)
+    texts = {item.text for item in extracted}
+    assert "item_id" not in texts
+    assert "example_item" not in texts
+    assert "unquoted_key" not in texts
+
+
+def test_extract_same_identifier_in_prose_still_extracted():
+    """An identifier skipped as LHS in a code block is still extracted if discussed in prose."""
+    markdown = """
+Inspect `rate_limit_exceeded` and `card_declined` errors returned by the API.
+
+```python
+rate_limit_exceeded = check_status()
+```
+"""
+    extracted = extract_identifiers(markdown)
+    error_codes = {item.text for item in extracted if item.kind == "error_code"}
+    assert "rate_limit_exceeded" in error_codes
+    assert "card_declined" in error_codes
