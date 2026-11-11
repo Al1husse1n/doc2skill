@@ -116,6 +116,13 @@ def main(
             help="Gemini model name for frontmatter synthesis and condensation.",
         ),
     ] = None,
+    strict: Annotated[
+        bool,
+        typer.Option(
+            "--strict",
+            help="Fail with exit code 1 if condensed output contains unverified identifiers.",
+        ),
+    ] = False,
 ) -> None:
     """Ingest markdown documentation or URL and emit a SKILL.md agent skill."""
     selected_model = model or os.getenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
@@ -135,8 +142,8 @@ def main(
         source_type=source_type,
     )
 
-    # Check cache unless --no-cache or --no-condense is specified
-    bypass_cache = no_cache or no_condense
+    # Check cache unless --no-cache, --no-condense, or --strict is specified
+    bypass_cache = no_cache or no_condense or strict
     cached_content = None if bypass_cache else cache.get(key)
     if cached_content is not None and not bypass_cache:
         typer.echo("Cache hit: writing from cache")
@@ -190,6 +197,7 @@ def main(
         max_output_tokens=max_output_tokens,
         max_context_tokens=max_context_tokens,
         no_condense=no_condense,
+        strict=strict,
     )
 
     result = graph.invoke(initial_state)
@@ -270,6 +278,29 @@ def main(
         typer.echo(
             f"  Condensed tokens: in {cond_in}, out {cond_out} (total {cond_in + cond_out})"
         )
+    validation_report = result.get("validation_report")
+    if validation_report is not None:
+        v_count = len(validation_report.get("verified", []))
+        k_count = len(validation_report.get("known_external", []))
+        u_count = len(validation_report.get("unverified", []))
+        total_ids = v_count + k_count + u_count
+        precision = float(validation_report.get("precision", 1.0))
+        typer.echo(
+            f"  Validation: {v_count} verified, {k_count} known-external, {u_count} unverified ({precision:.1%} precision)"
+        )
+        if u_count > 0:
+            if total_ids > 0 and u_count > 0.2 * total_ids:
+                typer.secho(
+                    f"Warning: {u_count} unverified identifiers — the LLM may be hallucinating. Check the output carefully.",
+                    fg=typer.colors.YELLOW,
+                    err=True,
+                )
+            else:
+                typer.secho(
+                    f"Warning: {u_count} unverified identifier(s) not found in source docs.",
+                    fg=typer.colors.YELLOW,
+                    err=True,
+                )
     typer.echo(f"  Output: {output_path}")
 
 

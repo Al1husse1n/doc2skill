@@ -371,3 +371,124 @@ def test_cli_max_output_and_context_tokens_flags(
     assert result.exit_code == 0
     assert captured["max_output_tokens"] == 9000
     assert captured["max_context_tokens"] == 120000
+
+
+def test_cli_strict_mode_fails_on_unverified(
+    cli_docs_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """CLI --strict exits with code 1 and skips SKILL.md emission when unverified identifiers exist."""
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
+
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        return CondensedResult(
+            body=(
+                "## API surface\n`httpx.FictionalClient`\n\n"
+                "## Common workflows\n1. Use `httpx.FictionalClient`.\n\n"
+                "## Gotchas\nNone.\n\n"
+                "## Reference\nmain.md"
+            ),
+            sources=["main.md"],
+            input_tokens=100,
+            output_tokens=600,
+            dropped_documents=[],
+            truncated=False,
+        )
+
+    stub_frontmatter = FrontmatterResult(
+        description="CLI strict fail test.",
+        when_to_use="- When testing --strict failure",
+        input_tokens=40,
+        output_tokens=15,
+    )
+
+    with (
+        patch("doc2skill.pipeline.graph.GeminiProvider.count_tokens", return_value=40),
+        patch(
+            "doc2skill.pipeline.graph.GeminiProvider.synthesize_frontmatter",
+            return_value=stub_frontmatter,
+        ),
+        patch("doc2skill.distill.condense.condense", side_effect=fake_condense),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                str(cli_docs_dir),
+                "--output",
+                str(output_dir),
+                "--strict",
+                "--no-cache",
+            ],
+        )
+
+    assert result.exit_code == 1
+    assert "Strict mode:" in result.output
+    assert "httpx.FictionalClient" in result.output
+    assert not (output_dir / "cli-sample" / "SKILL.md").exists()
+
+
+def test_cli_default_mode_warns_and_ships_when_unverified_high(
+    cli_docs_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Default mode warns when unverified > 20% of extracted identifiers and still emits SKILL.md."""
+    (cli_docs_dir / "main.md").write_text(
+        "# Main\nUse `httpx.Client` for requests.\n",
+        encoding="utf-8",
+    )
+    output_dir = tmp_path / "output"
+    monkeypatch.setenv("DOC2SKILL_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
+
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        return CondensedResult(
+            body=(
+                "## API surface\n`httpx.Client`, `httpx.FakeOne`, `httpx.FakeTwo`\n\n"
+                "## Common workflows\n1. Use `httpx.Client`.\n\n"
+                "## Gotchas\nAvoid `httpx.FakeOne` and `httpx.FakeTwo`.\n\n"
+                "## Reference\nmain.md"
+            ),
+            sources=["main.md"],
+            input_tokens=100,
+            output_tokens=600,
+            dropped_documents=[],
+            truncated=False,
+        )
+
+    stub_frontmatter = FrontmatterResult(
+        description="CLI default warning test.",
+        when_to_use="- When testing unverified warning",
+        input_tokens=40,
+        output_tokens=15,
+    )
+
+    with (
+        patch("doc2skill.pipeline.graph.GeminiProvider.count_tokens", return_value=40),
+        patch(
+            "doc2skill.pipeline.graph.GeminiProvider.synthesize_frontmatter",
+            return_value=stub_frontmatter,
+        ),
+        patch("doc2skill.distill.condense.condense", side_effect=fake_condense),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                str(cli_docs_dir),
+                "--output",
+                str(output_dir),
+                "--no-cache",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "Warning: 2 unverified identifiers — the LLM may be hallucinating." in result.output
+    assert "Validation: 1 verified, 0 known-external, 2 unverified" in result.output
+    assert (output_dir / "cli-sample" / "SKILL.md").exists()
