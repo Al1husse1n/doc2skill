@@ -866,6 +866,104 @@ async def test_build_supabase_cache_hit_before_load_url(
     assert "load_url" in call_order
 
 
+@pytest.mark.asyncio
+async def test_build_auth_required_when_api_key_set(
+    monkeypatch: pytest.MonkeyPatch, fake_docs: list[Document]
+):
+    """POST /api/build enforces X-API-Key when DOC2SKILL_API_KEY is set; read routes stay open."""
+
+    async def fake_load_url(url: str, max_pages: int = 100, follow_sitemap: bool = True):
+        return fake_docs
+
+    monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
+
+    payload = {
+        "source": "https://auth-test.example.com/docs",
+        "source_type": "url",
+        "max_pages": 5,
+        "max_tokens": 50_000,
+        "no_cache": True,
+        "no_llm": True,
+    }
+
+    # 1. Local mode (unset DOC2SKILL_API_KEY) allows unauthenticated /api/build
+    monkeypatch.delenv("DOC2SKILL_API_KEY", raising=False)
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp_open = await client.post("/api/build", json=payload)
+        assert resp_open.status_code == 200
+
+    # 2. Protected mode requires exact X-API-Key on POST /api/build
+    monkeypatch.setenv("DOC2SKILL_API_KEY", "super-secret-build-key")
+    protected_app = create_app()
+    protected_transport = httpx.ASGITransport(app=protected_app)
+    async with httpx.AsyncClient(transport=protected_transport, base_url="http://test") as client:
+        assert (await client.get("/")).status_code == 200
+        assert (await client.get("/api/health")).status_code == 200
+
+        resp_missing = await client.post("/api/build", json=payload)
+        assert resp_missing.status_code == 401
+
+        resp_wrong = await client.post(
+            "/api/build",
+            headers={"X-API-Key": "wrong-key"},
+            json=payload,
+        )
+        assert resp_wrong.status_code == 401
+
+        resp_valid = await client.post(
+            "/api/build",
+            headers={"X-API-Key": "super-secret-build-key"},
+            json=payload,
+        )
+        assert resp_valid.status_code == 200
+        assert _parse_sse(resp_valid.text)[-1][0] == "complete"
+
+
+@pytest.mark.asyncio
+async def test_build_rate_limit_429_on_sixth_request(
+    monkeypatch: pytest.MonkeyPatch, fake_docs: list[Document]
+):
+    """POST /api/build limits each IP to 5 requests per minute and returns 429 on the 6th."""
+    monkeypatch.delenv("DOC2SKILL_API_KEY", raising=False)
+
+    async def fake_load_url(url: str, max_pages: int = 100, follow_sitemap: bool = True):
+        return fake_docs
+
+    monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
+
+    payload = {
+        "source": "https://ratelimit.example.com/docs",
+        "source_type": "url",
+        "max_pages": 5,
+        "max_tokens": 50_000,
+        "no_cache": True,
+        "no_llm": True,
+    }
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        for i in range(5):
+            resp = await client.post("/api/build", json=payload)
+            assert resp.status_code == 200, f"Request {i + 1} unexpectedly returned {resp.status_code}"
+
+        resp_sixth = await client.post("/api/build", json=payload)
+        assert resp_sixth.status_code == 429
+        assert "retry-after" in resp_sixth.headers
+        assert "Rate limit exceeded" in resp_sixth.json()["detail"]
+
+        # Separate client IP still has its own 5 req/min allowance
+        resp_other_ip = await client.post(
+            "/api/build",
+            headers={"X-Forwarded-For": "203.0.113.42"},
+            json=payload,
+        )
+        assert resp_other_ip.status_code == 200
+
+
+
 
 
 

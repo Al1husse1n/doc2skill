@@ -68,6 +68,34 @@ def _validate_build_request(payload: BuildRequest) -> str:
     return source
 
 
+import os as _os
+import secrets
+import time
+from collections import defaultdict, deque
+
+
+class InMemoryRateLimiter:
+    """Simple per-IP sliding-window rate limiter scoped to an app instance."""
+
+    def __init__(self, max_requests: int = 5, window_seconds: float = 60.0) -> None:
+        self.max_requests = max_requests
+        self.window_seconds = window_seconds
+        self._hits: dict[str, deque[float]] = defaultdict(deque)
+
+    def check(self, key: str, now: float | None = None) -> tuple[bool, int]:
+        """Record an attempt for key; return (allowed, retry_after_seconds)."""
+        current = time.monotonic() if now is None else now
+        cutoff = current - self.window_seconds
+        bucket = self._hits[key]
+        while bucket and bucket[0] <= cutoff:
+            bucket.popleft()
+        if len(bucket) >= self.max_requests:
+            retry_after = max(1, int(bucket[0] + self.window_seconds - current) + 1)
+            return False, retry_after
+        bucket.append(current)
+        return True, 0
+
+
 def create_app() -> FastAPI:
     """Create and configure the local doc2skill FastAPI application."""
     app = FastAPI(
@@ -76,6 +104,40 @@ def create_app() -> FastAPI:
         docs_url=None,
         redoc_url=None,
     )
+
+    rate_limiter = InMemoryRateLimiter(max_requests=5, window_seconds=60.0)
+    app.state.rate_limiter = rate_limiter
+
+    def _client_ip(request: Request) -> str:
+        forwarded_for = request.headers.get("x-forwarded-for", "").strip()
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip() or "unknown"
+        if request.client and request.client.host:
+            return request.client.host
+        return "unknown"
+
+    @app.middleware("http")
+    async def auth_and_rate_limit_middleware(request: Request, call_next):
+        """Enforce optional DOC2SKILL_API_KEY and per-IP rate limiting on POST /api/build."""
+        if request.method == "POST" and request.url.path == "/api/build":
+            expected_key = _os.getenv("DOC2SKILL_API_KEY", "").strip()
+            if expected_key:
+                provided_key = request.headers.get("x-api-key", "").strip()
+                if not provided_key or not secrets.compare_digest(provided_key, expected_key):
+                    return JSONResponse(
+                        status_code=401,
+                        content={"detail": "Invalid or missing API key."},
+                    )
+
+            allowed, retry_after = rate_limiter.check(_client_ip(request))
+            if not allowed:
+                return JSONResponse(
+                    status_code=429,
+                    headers={"Retry-After": str(retry_after)},
+                    content={"detail": "Rate limit exceeded (max 5 requests per minute)."},
+                )
+
+        return await call_next(request)
 
     templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

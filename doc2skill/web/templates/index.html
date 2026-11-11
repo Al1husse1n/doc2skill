@@ -71,15 +71,28 @@
           <span class="toggle-label">Skip LLM (offline mode)</span>
         </label>
 
-        <button id="build-btn" type="submit" class="primary">
-          <span>Build skill</span>
-          <span class="btn-arrow" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M5 12h14"/>
-              <path d="m13 6 6 6-6 6"/>
-            </svg>
-          </span>
-        </button>
+        <div class="build-row">
+          <div class="api-key-field">
+            <label for="api-key-input" class="sr-only">API key (optional)</label>
+            <input
+              id="api-key-input"
+              name="api_key"
+              type="password"
+              autocomplete="current-password"
+              placeholder="API key (if required)"
+              aria-label="API key (if required)"
+            >
+          </div>
+          <button id="build-btn" type="submit" class="primary">
+            <span>Build skill</span>
+            <span class="btn-arrow" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M5 12h14"/>
+                <path d="m13 6 6 6-6 6"/>
+              </svg>
+            </span>
+          </button>
+        </div>
       </form>
     </section>
 
@@ -407,10 +420,17 @@
         no_llm: document.getElementById("no-llm").checked,
       };
 
+      const headers = { "Content-Type": "application/json" };
+      const apiKeyInput = document.getElementById("api-key-input");
+      const apiKey = apiKeyInput ? apiKeyInput.value.trim() : "";
+      if (apiKey) {
+        headers["X-API-Key"] = apiKey;
+      }
+
       try {
         const resp = await fetch("/api/build", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers,
           body: JSON.stringify(payload),
         });
 
