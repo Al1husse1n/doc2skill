@@ -55,6 +55,7 @@
       </ul>
       <div id="metrics" class="metrics hidden"></div>
       <div id="warning-badge" class="warning-badge hidden"></div>
+      <div id="validation-badge" class="warning-badge hidden"></div>
       <div id="error-banner" class="error-banner hidden"></div>
     </section>
 
@@ -76,6 +77,7 @@
     const progressArea = document.getElementById("progress-area");
     const metricsEl = document.getElementById("metrics");
     const warningBadge = document.getElementById("warning-badge");
+    const validationBadge = document.getElementById("validation-badge");
     const errorBanner = document.getElementById("error-banner");
     const resultArea = document.getElementById("result-area");
     const skillPreview = document.getElementById("skill-preview");
@@ -130,6 +132,37 @@
       warningBadge.classList.remove("hidden");
     }
 
+    function showValidationWarning(count, items) {
+      validationBadge.innerHTML = "";
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `${count} identifiers not found in source docs — see details`;
+      details.appendChild(summary);
+
+      const list = document.createElement("ul");
+      list.style.margin = "0.5rem 0 0";
+      list.style.paddingLeft = "1.25rem";
+      list.style.fontWeight = "400";
+      for (const item of items) {
+        const li = document.createElement("li");
+        if (typeof item === "string") {
+          li.textContent = item;
+        } else {
+          const code = document.createElement("code");
+          code.textContent = item.text || "";
+          const meta = document.createTextNode(
+            ` (${item.kind || "unknown"})${item.context ? ": " + item.context : ""}`
+          );
+          li.appendChild(code);
+          li.appendChild(meta);
+        }
+        list.appendChild(li);
+      }
+      details.appendChild(list);
+      validationBadge.appendChild(details);
+      validationBadge.classList.remove("hidden");
+    }
+
     function resetUI() {
       progressArea.classList.remove("hidden");
       resultArea.classList.add("hidden");
@@ -137,6 +170,8 @@
       metricsEl.classList.add("hidden");
       warningBadge.textContent = "";
       warningBadge.classList.add("hidden");
+      validationBadge.innerHTML = "";
+      validationBadge.classList.add("hidden");
       errorBanner.textContent = "";
       errorBanner.classList.add("hidden");
       currentSkillMd = "";
@@ -188,6 +223,17 @@
         const cOut = Number(data.output_tokens || 0).toLocaleString();
         const secs = Array.isArray(data.sections) ? data.sections.join(", ") : "";
         addMetric(`Condensed corpus (${cIn} in → ${cOut} out): ${secs}`);
+      } else if (eventName === "validation") {
+        const verifiedCount = Number(data.verified_count || 0);
+        const externalCount = Number(data.known_external_count || 0);
+        const unverifiedCount = Number(data.unverified_count || 0);
+        const pct = Math.round(Number(data.precision ?? 1) * 100);
+        addMetric(
+          `Validation: ${verifiedCount} verified, ${externalCount} known-external, ${unverifiedCount} unverified (${pct}% precision)`
+        );
+        if (unverifiedCount > 0) {
+          showValidationWarning(unverifiedCount, data.unverified_preview || []);
+        }
       } else if (eventName === "complete") {
         if (data.cache_hit) {
           setStepState("ingest", "skipped");
@@ -199,6 +245,12 @@
         }
         if (data.truncated && Array.isArray(data.dropped_documents) && data.dropped_documents.length > 0) {
           showWarning(`${data.dropped_documents.length} docs dropped to fit context limit.`);
+        }
+        if (data.validation && Number(data.validation.unverified_count || 0) > 0) {
+          showValidationWarning(
+            Number(data.validation.unverified_count),
+            data.validation.unverified || []
+          );
         }
         setStepState("render", "done");
         currentSkillMd = data.skill_md || "";

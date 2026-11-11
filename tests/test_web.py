@@ -674,5 +674,93 @@ async def test_build_sse_condensed(
     ]
 
 
+@pytest.mark.asyncio
+async def test_build_sse_validation(monkeypatch: pytest.MonkeyPatch):
+    """Mock condense with 1 verified + 1 unverified identifier -> assert validation SSE and complete dict."""
+    monkeypatch.setenv("GEMINI_API_KEY", "test-fake-key")
+    monkeypatch.setenv("DOC2SKILL_LLM_MODEL", "gemini-2.5-flash")
+
+    docs = [
+        Document(
+            path="https://fake-docs.example.com/client",
+            content="# Client\nUse `httpx.Client` for HTTP requests.",
+            title="Client",
+        )
+    ]
+
+    async def fake_load_url(url: str, max_pages: int = 100):
+        return docs
+
+    def fake_count_tokens(self, prompt: str) -> int:
+        return 100
+
+    def fake_synthesize(self, documents, max_tokens: int = 1000) -> FrontmatterResult:
+        return FrontmatterResult(
+            description="Validation SSE test skill.",
+            when_to_use="- When checking validation SSE output",
+            input_tokens=80,
+            output_tokens=20,
+        )
+
+    async def fake_condense(
+        documents, model=None, max_output_tokens=15_000, max_context_tokens=500_000
+    ):
+        return CondensedResult(
+            body=(
+                "## API surface\n`httpx.Client` and `httpx.FictionalClient`\n\n"
+                "## Common workflows\n1. Use `httpx.Client`.\n\n"
+                "## Gotchas\nAvoid `httpx.FictionalClient`.\n\n"
+                "## Reference\nclient"
+            ),
+            sources=[d.path for d in documents],
+            input_tokens=300,
+            output_tokens=120,
+            dropped_documents=[],
+            truncated=False,
+        )
+
+    monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
+    monkeypatch.setattr(GeminiProvider, "count_tokens", fake_count_tokens)
+    monkeypatch.setattr(GeminiProvider, "synthesize_frontmatter", fake_synthesize)
+    monkeypatch.setattr("doc2skill.distill.condense.condense", fake_condense)
+
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/build",
+            json={
+                "source": "https://fake-docs.example.com/",
+                "source_type": "url",
+                "max_pages": 50,
+                "max_tokens": 50_000,
+                "no_cache": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    parsed = _parse_sse(resp.text)
+    names = [name for name, _ in parsed]
+    assert names.index("llm_done") < names.index("validation") < names.index("complete")
+
+    events_map = dict(parsed)
+    val_event = events_map["validation"]
+    assert val_event["verified_count"] == 1
+    assert val_event["known_external_count"] == 0
+    assert val_event["unverified_count"] == 1
+    assert val_event["precision"] == 0.5
+    assert val_event["unverified_preview"] == ["httpx.FictionalClient"]
+
+    complete_val = events_map["complete"]["validation"]
+    assert complete_val["verified_count"] == 1
+    assert complete_val["known_external_count"] == 0
+    assert complete_val["unverified_count"] == 1
+    assert complete_val["precision"] == 0.5
+    assert len(complete_val["unverified"]) == 1
+    assert complete_val["unverified"][0]["text"] == "httpx.FictionalClient"
+    assert complete_val["unverified"][0]["kind"] == "class"
+    assert "httpx.FictionalClient" in complete_val["unverified"][0]["context"]
+
+
 
 

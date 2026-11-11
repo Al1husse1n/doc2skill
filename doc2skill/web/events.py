@@ -198,6 +198,67 @@ def _map_node_update(
 
         return events, "render", False
 
+    if node_name == "validate":
+        errors = payload.get("errors") or []
+        report = payload.get("validation_report")
+        if report is None:
+            if errors:
+                return (
+                    [sse_event("error", {"stage": "validate", "message": errors[-1]})],
+                    None,
+                    True,
+                )
+            return [], "render", False
+
+        verified = list(report.get("verified") or [])
+        known_external = list(report.get("known_external") or [])
+        unverified = list(report.get("unverified") or [])
+        denom = len(verified) + len(unverified)
+        raw_precision = (
+            float(report["precision"])
+            if "precision" in report
+            else (len(verified) / denom if denom else 1.0)
+        )
+        precision = round(raw_precision, 3)
+
+        run_meta["validation"] = {
+            "verified_count": len(verified),
+            "known_external_count": len(known_external),
+            "unverified_count": len(unverified),
+            "precision": precision,
+            "unverified": [
+                {
+                    "text": str(item.get("text", "")),
+                    "kind": str(item.get("kind", "")),
+                    "context": str(item.get("context", "")),
+                }
+                for item in unverified
+            ],
+        }
+
+        events = [
+            sse_event(
+                "validation",
+                {
+                    "verified_count": len(verified),
+                    "known_external_count": len(known_external),
+                    "unverified_count": len(unverified),
+                    "precision": precision,
+                    "unverified_preview": [
+                        str(item.get("text", "")) for item in unverified[:5]
+                    ],
+                },
+            )
+        ]
+
+        if errors:
+            events.append(
+                sse_event("error", {"stage": "validate", "message": errors[-1]})
+            )
+            return events, None, True
+
+        return events, "render", False
+
     if node_name == "emit_skill":
         skill_md = payload.get("skill_md") or ""
         skill_name = derive_skill_name(source)
@@ -212,6 +273,8 @@ def _map_node_update(
             complete_data["dropped_documents"] = list(
                 run_meta.get("dropped_documents") or []
             )
+        if run_meta.get("validation") is not None:
+            complete_data["validation"] = run_meta["validation"]
         return (
             [sse_event("complete", complete_data)],
             None,
@@ -266,6 +329,7 @@ async def pipeline_event_stream(
         "truncated": False,
         "dropped_documents": [],
         "truncate_warning_emitted": False,
+        "validation": None,
     }
 
     with tempfile.TemporaryDirectory() as tmp_dir:
