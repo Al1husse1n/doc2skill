@@ -43,6 +43,36 @@ def test_httpx_docs_condensation_eval(tmp_path: Path):
     actual_tokens = result.get("actual_tokens", 0)
     truncated = bool(result.get("truncated", False))
 
+    report = result.get("validation_report")
+    assert report is not None, "Expected validation_report in pipeline result"
+    verified_list = report["verified"]
+    known_external_list = report["known_external"]
+    source_divergent_list = report["source_divergent"]
+    unverified_list = report["unverified"]
+    precision = float(report["precision"])
+    inference_rate = float(report["inference_rate"])
+
+    important_identifiers = [
+        "httpx.Client",
+        "httpx.AsyncClient",
+        "httpx.get",
+        "httpx.post",
+        "httpx.Timeout",
+        "follow_redirects",
+        "raise_for_status",
+        "iter_bytes",
+        "event_hooks",
+        "base_url",
+        "timeout",
+    ]
+    found_important = [ident for ident in important_identifiers if ident in skill_md]
+    recall = len(found_important) / len(important_identifiers)
+
+    by_kind: dict[str, list[str]] = {}
+    for entry in verified_list:
+        by_kind.setdefault(entry["kind"], []).append(entry["text"])
+    verified_sample_by_kind = {kind: texts[:5] for kind, texts in by_kind.items()}
+
     # 2. Uncondensed baseline run (--no-condense)
     baseline_out = tmp_path / "baseline_out"
     baseline_state = create_initial_state(
@@ -67,6 +97,15 @@ def test_httpx_docs_condensation_eval(tmp_path: Path):
         f"\nLLM input tokens: {llm_in}"
         f"\nTotal actual tokens: {actual_tokens}"
         f"\nTruncated: {truncated}"
+        f"\nValidation precision: {precision:.2f} "
+        f"(verified={len(verified_list)}, known_external={len(known_external_list)}, "
+        f"source_divergent={len(source_divergent_list)}, unverified={len(unverified_list)})"
+        f"\nInference rate: {inference_rate:.2f} ({len(source_divergent_list)} / "
+        f"{len(verified_list) + len(source_divergent_list) + len(unverified_list)})"
+        f"\nImportant identifier recall: {recall:.2f} ({len(found_important)}/{len(important_identifiers)})"
+        f"\nUnverified identifiers: {[i['text'] for i in unverified_list]}"
+        f"\nSource-divergent identifiers: {[i['text'] for i in source_divergent_list]}"
+        f"\nVerified total: {len(verified_list)}, sample 5: {[(i['text'], i['kind']) for i in verified_list[:5]]}"
     )
 
     # Assertion 1: Condensed skill fits <= 15,000 token budget, corpus fits context without truncation
@@ -132,5 +171,12 @@ def test_httpx_docs_condensation_eval(tmp_path: Path):
     # Assertion 7: Uncondensed baseline exceeds 15k tokens (proves condensation compressed corpus)
     assert baseline_skill_tokens > 15_000, (
         f"Expected uncondensed baseline > 15,000 tokens, got {baseline_skill_tokens}"
+    )
+
+    # Assertion 8: Precision >= 0.90, Inference rate <= 0.15, and Important Identifier Recall >= 0.80
+    assert precision >= 0.90, f"Precision too low: {precision}"
+    assert inference_rate <= 0.15, f"Inference rate too high: {inference_rate}"
+    assert recall >= 0.80, (
+        f"Recall too low: {recall} (missing: {set(important_identifiers) - set(found_important)})"
     )
 
