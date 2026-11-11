@@ -2,6 +2,8 @@
 
 doc2skill converts documentation (local markdown or a docs URL) into an agent skill — a compact `SKILL.md` that another agent can load to actually use the tool being documented.
 
+**Live preview:** [https://doc2skill.onrender.com/](https://doc2skill.onrender.com/)
+
 ## Installation
 
 `doc2skill` is not published on PyPI yet. Install it as an editable package from source:
