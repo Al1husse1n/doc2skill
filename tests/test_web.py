@@ -771,5 +771,101 @@ async def test_build_sse_validation(monkeypatch: pytest.MonkeyPatch):
     assert "httpx.FictionalClient" in complete_val["unverified"][0]["context"]
 
 
+@pytest.mark.asyncio
+async def test_build_supabase_cache_hit_before_load_url(
+    monkeypatch: pytest.MonkeyPatch, fake_docs: list[Document]
+):
+    """Supabase cache is checked before load_url; hits skip crawling and emit cache_hit."""
+    from doc2skill.cache import supabase as supabase_cache
+
+    call_order: list[str] = []
+    set_calls: list[tuple[str, int, str, str]] = []
+    cached_md = "---\nname: cached-skill\ndescription: cached\n---\n\n# Cached Skill\n"
+
+    async def fake_load_url(url: str, max_pages: int = 100, follow_sitemap: bool = True):
+        call_order.append("load_url")
+        return fake_docs
+
+    def fake_get_hit(source: str, max_tokens: int, model: str) -> str | None:
+        call_order.append("get_cached_skill")
+        return cached_md
+
+    def fake_set(source: str, max_tokens: int, model: str, skill_md: str) -> None:
+        call_order.append("set_cached_skill")
+        set_calls.append((source, max_tokens, model, skill_md))
+
+    monkeypatch.setattr("doc2skill.ingest.url.load_url", fake_load_url)
+    monkeypatch.setattr(supabase_cache, "get_cached_skill", fake_get_hit)
+    monkeypatch.setattr(supabase_cache, "set_cached_skill", fake_set)
+
+    # 1. Cache hit -> load_url must NOT be called; emits cache_hit and complete(cache_hit=True)
+    app = create_app()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp = await client.post(
+            "/api/build",
+            json={
+                "source": "https://cached.example.com/docs",
+                "source_type": "url",
+                "max_pages": 10,
+                "max_tokens": 50_000,
+                "no_cache": False,
+                "no_llm": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    parsed = _parse_sse(resp.text)
+    event_names = [name for name, _ in parsed]
+    assert "cache_hit" in event_names
+    assert event_names[-1] == "complete"
+    data_by_event = dict(parsed)
+    assert data_by_event["cache_hit"]["skill_md"] == cached_md
+    assert data_by_event["complete"]["cache_hit"] is True
+    assert data_by_event["complete"]["skill_md"] == cached_md
+    assert call_order == ["get_cached_skill"]
+    assert "load_url" not in call_order
+
+    # 2. Cache miss -> get_cached_skill MUST precede load_url
+    call_order.clear()
+    monkeypatch.setattr(supabase_cache, "get_cached_skill", lambda *a, **kw: (call_order.append("get_cached_skill"), None)[1])
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp_miss = await client.post(
+            "/api/build",
+            json={
+                "source": "https://miss.example.com/docs",
+                "source_type": "url",
+                "max_pages": 10,
+                "max_tokens": 50_000,
+                "no_cache": False,
+                "no_llm": True,
+            },
+        )
+    assert resp_miss.status_code == 200
+    assert call_order.index("get_cached_skill") < call_order.index("load_url")
+    assert len(set_calls) == 1
+
+    # 3. no_cache=True -> neither get_cached_skill nor set_cached_skill is called
+    call_order.clear()
+    set_calls.clear()
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        resp_bypass = await client.post(
+            "/api/build",
+            json={
+                "source": "https://nocache.example.com/docs",
+                "source_type": "url",
+                "max_pages": 10,
+                "max_tokens": 50_000,
+                "no_cache": True,
+                "no_llm": True,
+            },
+        )
+    assert resp_bypass.status_code == 200
+    assert "get_cached_skill" not in call_order
+    assert "set_cached_skill" not in call_order
+    assert "load_url" in call_order
+
+
+
 
 

@@ -8,6 +8,7 @@ from typing import Any
 from fastapi import Request
 
 from doc2skill.cache import disk as cache
+from doc2skill.cache import supabase as supabase_cache
 from doc2skill.emit.skill import derive_skill_name
 from doc2skill.llm.gemini import DEFAULT_MODEL
 from doc2skill.pipeline.graph import build_pipeline_graph
@@ -336,12 +337,34 @@ async def pipeline_event_stream(
     )
 
     bypass_cache = no_cache or no_condense
-    cached_skill = None if bypass_cache else cache.get(key)
+    cached_skill: str | None = None
+    cache_backend: str | None = None
+    if not bypass_cache:
+        cached_skill = await asyncio.to_thread(
+            supabase_cache.get_cached_skill, source, max_tokens, selected_model
+        )
+        if cached_skill is not None:
+            cache_backend = "supabase"
+        else:
+            cached_skill = cache.get(key)
+            if cached_skill is not None:
+                cache_backend = "disk"
+
     if cached_skill is not None:
+        skill_name = derive_skill_name(source)
+        yield sse_event(
+            "cache_hit",
+            {
+                "source": source,
+                "backend": cache_backend or "cache",
+                "skill_name": skill_name,
+                "skill_md": cached_skill,
+            },
+        )
         yield sse_event(
             "complete",
             {
-                "skill_name": derive_skill_name(source),
+                "skill_name": skill_name,
                 "skill_md": cached_skill,
                 "cache_hit": True,
                 "truncated": False,
@@ -400,6 +423,13 @@ async def pipeline_event_stream(
                     skill_md = payload.get("skill_md") or ""
                     if skill_md:
                         cache.set(key, skill_md)
+                        await asyncio.to_thread(
+                            supabase_cache.set_cached_skill,
+                            source,
+                            max_tokens,
+                            selected_model,
+                            skill_md,
+                        )
 
                 for ev in events:
                     yield ev

@@ -354,6 +354,9 @@
         if (unverifiedCount > 0) {
           showValidationWarning(unverifiedCount, data.unverified_preview || []);
         }
+      } else if (eventName === "cache_hit") {
+        setProgress(95);
+        addMetric(`Cache hit (${data.backend || "cache"}) — skipping crawl and LLM`);
       } else if (eventName === "complete") {
         if (data.cache_hit) {
           setStepState("ingest", "skipped");

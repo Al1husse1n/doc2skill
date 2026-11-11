@@ -10,6 +10,7 @@ import typer
 
 from doc2skill.budget.guard import DEFAULT_MAX_TOKENS, estimate_tokens
 from doc2skill.cache import disk as cache
+from doc2skill.cache import supabase as supabase_cache
 from doc2skill.emit.skill import derive_skill_name, write_skill_file
 from doc2skill.ingest.coalesce import AsyncSingleFlight
 from doc2skill.ingest.url import load_url
@@ -144,7 +145,13 @@ def main(
 
     # Check cache unless --no-cache, --no-condense, or --strict is specified
     bypass_cache = no_cache or no_condense or strict
-    cached_content = None if bypass_cache else cache.get(key)
+    cached_content: str | None = None
+    if not bypass_cache:
+        cached_content = supabase_cache.get_cached_skill(
+            str(source_path), max_tokens, selected_model
+        )
+        if cached_content is None:
+            cached_content = cache.get(key)
     if cached_content is not None and not bypass_cache:
         typer.echo("Cache hit: writing from cache")
         out_file = write_skill_file(cached_content, skill_name, output_dir=output)
@@ -236,8 +243,11 @@ def main(
     )
 
     # Store result in cache (unless --no-cache or --no-condense)
-    if not no_cache and not no_condense:
+    if not no_cache and not no_condense and skill_md:
         cache.set(key, skill_md)
+        supabase_cache.set_cached_skill(
+            str(source_path), max_tokens, selected_model, skill_md
+        )
 
     dropped_docs = result.get("dropped_documents", [])
     docs_loaded = len(result.get("documents", [])) + len(dropped_docs)
